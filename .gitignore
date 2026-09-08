@@ -8,9 +8,11 @@
 # Ansible Secrets & Keys
 ansible/inventory.ini
 ansible/group_vars/all/vault.yml
-.vault_pass
+ansible/.vault_pass
 *.pem
 *.key
 
 # Runtime Environment Files
 .env
+
+.direnv
