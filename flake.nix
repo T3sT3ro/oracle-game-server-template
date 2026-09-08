@@ -25,6 +25,7 @@
             # Configuration Management
             ansible
             ansible-lint
+            ansible-python-supplements
 
             # Container & Stack Management
             docker
