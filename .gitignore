@@ -1,0 +1,16 @@
+# Terraform State & Secrets
+*.tfstate
+*.tfstate.backup
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+
+# Ansible Secrets & Keys
+ansible/inventory.ini
+ansible/group_vars/all/vault.yml
+.vault_pass
+*.pem
+*.key
+
+# Runtime Environment Files
+.env
