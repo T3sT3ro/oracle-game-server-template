@@ -138,3 +138,13 @@ resource "oci_core_volume_attachment" "va" {
 output "public_ip" {
   value = oci_core_instance.game_server.public_ip
 }
+
+# --- Ansible Inventory Generation ---
+
+resource "local_file" "ansible_inventory" {
+  content = templatefile("${path.module}/../ansible/inventory.ini.tpl", {
+    public_ip = oci_core_public_ip.reserved_ip.ip_address
+    ssh_key   = "~/.ssh/id_rsa"
+  })
+  filename = "${path.module}/../ansible/inventory.ini"
+}

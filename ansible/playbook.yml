@@ -1,0 +1,129 @@
+- name: Configure Game Server Host
+  hosts: game_servers
+  become: yes
+  vars:
+    data_mount_point: "/mnt/data"
+
+  tasks:
+    - name: Ensure dependencies are installed
+      apt:
+        name:
+          - xfsprogs
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - ufw
+        state: present
+        update_cache: yes
+
+    - name: Locate secondary attached storage block device
+      command: lsblk -dn -o NAME,TYPE
+      register: lsblk_out
+      changed_when: false
+
+    - name: Set target device variable
+      set_fact:
+        target_device: "/dev/sdb"
+
+    - name: Format block volume to XFS if unformatted
+      filesystem:
+        fstype: xfs
+        dev: "{{ target_device }}"
+
+    - name: Create mount point directory
+      file:
+        path: "{{ data_mount_point }}"
+        state: directory
+        mode: '0755'
+
+    - name: Mount persistent volume via fstab
+      mount:
+        path: "{{ data_mount_point }}"
+        src: "{{ target_device }}"
+        fstype: xfs
+        state: mounted
+
+    - name: Create persistent service directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ data_mount_point }}/caddy"
+        - "{{ data_mount_point }}/caddy/data"
+        - "{{ data_mount_point }}/caddy/config"
+        - "{{ data_mount_point }}/pelican/db"
+        - "{{ data_mount_point }}/pelican/var"
+        - "{{ data_mount_point }}/app"
+
+    - name: Install Docker Keyring
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker GPG key
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu jammy stable"
+        state: present
+
+    - name: Install Docker Engine and Compose Plugin
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Configure UFW Firewall rules
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+      loop:
+        - { port: '22', proto: 'tcp' }
+        - { port: '80', proto: 'tcp' }
+        - { port: '443', proto: 'tcp' }
+        - { port: '2022', proto: 'tcp' }
+        - { port: '8080', proto: 'tcp' }
+        - { port: '25565', proto: 'tcp' }
+        - { port: '25565', proto: 'udp' }
+
+    - name: Enable UFW Firewall
+      ufw:
+        state: enabled
+
+    - name: Copy Caddyfile to target
+      copy:
+        src: files/Caddyfile
+        dest: "{{ data_mount_point }}/caddy/Caddyfile"
+        mode: '0644'
+
+    - name: Render secure environment file for Docker Compose
+      template:
+        src: templates/.env.j2
+        dest: "{{ data_mount_point }}/app/.env"
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Copy docker-compose.yml to target
+      copy:
+        src: files/docker-compose.yml
+        dest: "{{ data_mount_point }}/app/docker-compose.yml"
+        mode: '0644'
+
+    - name: Deploy Docker Compose stack
+      command: docker compose up -d
+      args:
+        chdir: "{{ data_mount_point }}/app"

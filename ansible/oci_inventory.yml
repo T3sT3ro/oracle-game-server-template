@@ -1,0 +1,19 @@
+plugin: oracle.oci.oci
+
+# Regions to query
+regions:
+  - eu-frankfurt-1   # Replace with your OCI region
+
+# Target compartment
+compartments:
+  - compartment_ocid: "ocid1.compartment.oc1..your_compartment_ocid"
+    fetch_hosts_from_subnets: true
+
+# Prefer Public IP for SSH connection
+hostname_format_preferences:
+  - "public_ip"
+
+# Group instances automatically based on Terraform tags
+keyed_groups:
+  - key: freeform_tags.Role
+    prefix: role

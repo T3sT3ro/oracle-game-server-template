@@ -1,0 +1,9 @@
+version: '3'
+services:
+  local-test-node:
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    container_name: local_ansible_target
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroup: host

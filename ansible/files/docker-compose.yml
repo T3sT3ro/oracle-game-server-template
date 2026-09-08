@@ -1,0 +1,63 @@
+version: '3.8'
+
+networks:
+  pelican-net:
+    driver: bridge
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy_proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - /mnt/data/caddy/data:/data
+      - /mnt/data/caddy/config:/config
+    networks:
+      - pelican-net
+
+  pelican-db:
+    image: mariadb:10.11
+    container_name: pelican_db
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - /mnt/data/pelican/db:/var/lib/mysql
+    networks:
+      - pelican-net
+
+  pelican-redis:
+    image: redis:7-alpine
+    container_name: pelican_redis
+    restart: always
+    networks:
+      - pelican-net
+
+  pelican-panel:
+    image: ghcr.io/pelican-dev/panel:latest
+    container_name: pelican_panel
+    restart: always
+    ports:
+      - "8080:80"
+    environment:
+      APP_ENV: production
+      APP_URL: ${APP_URL}
+      DB_HOST: pelican-db
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_HOST: pelican-redis
+    volumes:
+      - /mnt/data/pelican/var:/app/var
+    depends_on:
+      - pelican-db
+      - pelican-redis
+    networks:
+      - pelican-net
