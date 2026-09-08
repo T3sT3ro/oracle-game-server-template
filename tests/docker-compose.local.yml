@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   local-node:
     image: geerlingguy/docker-ubuntu2204-ansible:latest
@@ -7,8 +5,12 @@ services:
     privileged: true
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - test-docker-data:/var/lib/docker
     cgroup: host
     ports:
       - "80:80"
       - "443:443"
       - "8080:8080"
+
+volumes:
+  test-docker-data:

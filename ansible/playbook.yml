@@ -1,22 +1,28 @@
 - name: Configure Universal Game Server
   hosts: all
-  become: yes
+  become: true
 
   tasks:
     - name: Ensure basic utilities are installed
       apt:
         name: [xfsprogs, ca-certificates, curl, gnupg, lsb-release, ufw]
         state: present
-        update_cache: yes
+        update_cache: true
 
     - name: Target OCI Block Storage (Usually /dev/sdb on Ampere A1)
       set_fact:
         target_device: "/dev/sdb"
 
+    - name: Check if block device exists
+      stat:
+        path: "{{ target_device }}"
+      register: dev_stat
+
     - name: Format block volume to XFS if unformatted
       filesystem:
         fstype: xfs
         dev: "{{ target_device }}"
+      when: dev_stat.stat.exists
 
     - name: Create mount point directory
       file:
@@ -29,6 +35,7 @@
         src: "{{ target_device }}"
         fstype: xfs
         state: mounted
+      when: dev_stat.stat.exists
 
     - name: Ensure directories exist safely
       file:
@@ -53,21 +60,55 @@
       changed_when: false
 
     - name: Add Docker Repository
-      apt_repository:
-        repo: "deb [arch={{ dpkg_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ lsb_release.stdout }} stable"
+      deb822_repository:
+        name: docker
+        types: [deb]
+        uris: https://download.docker.com/linux/ubuntu
+        suites: ["{{ lsb_release.stdout }}"]
+        components: [stable]
+        architectures: ["{{ dpkg_arch.stdout }}"]
+        signed_by: /etc/apt/keyrings/docker.asc
         state: present
+        install_python_debian: true
 
     - name: Install Docker Engine and Compose
       apt:
         name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
         state: latest
-        update_cache: yes
+        update_cache: true
 
-    - name: Enable Firewall rules
+    - name: Configure Docker to use VFS driver for local test environment
+      copy:
+        content: |
+          {
+            "storage-driver": "vfs"
+          }
+        dest: /etc/docker/daemon.json
+      when: not dev_stat.stat.exists
+
+    - name: Ensure Docker service is running and enabled
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Configure UFW Firewall rules
       ufw:
         rule: allow
-        port: "{{ item }}"
-      loop: ['22/tcp', '80/tcp', '443/tcp', '2022/tcp', '8080/tcp', '25565/tcp', '7777/udp']
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+      loop:
+        - { port: '22', proto: 'tcp' }
+        - { port: '80', proto: 'tcp' }
+        - { port: '443', proto: 'tcp' }
+        - { port: '2022', proto: 'tcp' }
+        - { port: '8080', proto: 'tcp' }
+        - { port: '25565', proto: 'tcp' }
+        - { port: '25565', proto: 'udp' }
+
+    - name: Enable UFW Firewall
+      ufw:
+        state: enabled
 
     - name: Template Caddy proxy rules
       template:
