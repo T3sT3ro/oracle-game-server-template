@@ -1,7 +1,0 @@
-panel.dashunderdash.com {
-    reverse_proxy pelican-panel:80
-}
-
-web.dashunderdash.com {
-    respond "Web service active." 200
-}

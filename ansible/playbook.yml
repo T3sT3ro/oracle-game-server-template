@@ -1,28 +1,15 @@
-- name: Configure Game Server Host
-  hosts: game_servers
+- name: Configure Universal Game Server
+  hosts: all
   become: yes
-  vars:
-    data_mount_point: "/mnt/data"
 
   tasks:
-    - name: Ensure dependencies are installed
+    - name: Ensure basic utilities are installed
       apt:
-        name:
-          - xfsprogs
-          - ca-certificates
-          - curl
-          - gnupg
-          - lsb-release
-          - ufw
+        name: [xfsprogs, ca-certificates, curl, gnupg, lsb-release, ufw]
         state: present
         update_cache: yes
 
-    - name: Locate secondary attached storage block device
-      command: lsblk -dn -o NAME,TYPE
-      register: lsblk_out
-      changed_when: false
-
-    - name: Set target device variable
+    - name: Target OCI Block Storage (Usually /dev/sdb on Ampere A1)
       set_fact:
         target_device: "/dev/sdb"
 
@@ -35,7 +22,6 @@
       file:
         path: "{{ data_mount_point }}"
         state: directory
-        mode: '0755'
 
     - name: Mount persistent volume via fstab
       mount:
@@ -44,24 +30,11 @@
         fstype: xfs
         state: mounted
 
-    - name: Create persistent service directories
+    - name: Ensure directories exist safely
       file:
-        path: "{{ item }}"
+        path: "{{ data_mount_point }}/{{ item }}"
         state: directory
-        mode: '0755'
-      loop:
-        - "{{ data_mount_point }}/caddy"
-        - "{{ data_mount_point }}/caddy/data"
-        - "{{ data_mount_point }}/caddy/config"
-        - "{{ data_mount_point }}/pelican/db"
-        - "{{ data_mount_point }}/pelican/var"
-        - "{{ data_mount_point }}/app"
-
-    - name: Install Docker Keyring
-      file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: '0755'
+      loop: [caddy, caddy/data, pelican/db, pelican/var, app]
 
     - name: Add Docker GPG key
       get_url:
@@ -69,61 +42,51 @@
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
 
+    - name: Detect System Architecture dynamically
+      command: dpkg --print-architecture
+      register: dpkg_arch
+      changed_when: false
+
+    - name: Detect OS release dynamically
+      command: lsb_release -cs
+      register: lsb_release
+      changed_when: false
+
     - name: Add Docker Repository
       apt_repository:
-        repo: "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu jammy stable"
+        repo: "deb [arch={{ dpkg_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ lsb_release.stdout }} stable"
         state: present
 
-    - name: Install Docker Engine and Compose Plugin
+    - name: Install Docker Engine and Compose
       apt:
-        name:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-          - docker-buildx-plugin
-          - docker-compose-plugin
-        state: present
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+        state: latest
         update_cache: yes
 
-    - name: Configure UFW Firewall rules
+    - name: Enable Firewall rules
       ufw:
         rule: allow
-        port: "{{ item.port }}"
-        proto: "{{ item.proto }}"
-      loop:
-        - { port: '22', proto: 'tcp' }
-        - { port: '80', proto: 'tcp' }
-        - { port: '443', proto: 'tcp' }
-        - { port: '2022', proto: 'tcp' }
-        - { port: '8080', proto: 'tcp' }
-        - { port: '25565', proto: 'tcp' }
-        - { port: '25565', proto: 'udp' }
+        port: "{{ item }}"
+      loop: ['22/tcp', '80/tcp', '443/tcp', '2022/tcp', '8080/tcp', '25565/tcp', '7777/udp']
 
-    - name: Enable UFW Firewall
-      ufw:
-        state: enabled
-
-    - name: Copy Caddyfile to target
-      copy:
-        src: files/Caddyfile
+    - name: Template Caddy proxy rules
+      template:
+        src: templates/Caddyfile.j2
         dest: "{{ data_mount_point }}/caddy/Caddyfile"
-        mode: '0644'
 
-    - name: Render secure environment file for Docker Compose
+    - name: Template restricted .env file
       template:
         src: templates/.env.j2
         dest: "{{ data_mount_point }}/app/.env"
-        mode: '0600'
+        mode: '0600' # Strict host-side security
         owner: root
-        group: root
 
-    - name: Copy docker-compose.yml to target
-      copy:
-        src: files/docker-compose.yml
+    - name: Template docker-compose file
+      template:
+        src: templates/docker-compose.yml.j2
         dest: "{{ data_mount_point }}/app/docker-compose.yml"
-        mode: '0644'
 
-    - name: Deploy Docker Compose stack
+    - name: Start Docker Stack
       command: docker compose up -d
       args:
         chdir: "{{ data_mount_point }}/app"

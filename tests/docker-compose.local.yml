@@ -1,9 +1,14 @@
-version: '3'
+version: '3.8'
+
 services:
-  local-test-node:
+  local-node:
     image: geerlingguy/docker-ubuntu2204-ansible:latest
-    container_name: local_ansible_target
+    container_name: oci_test_node
     privileged: true
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
     cgroup: host
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"

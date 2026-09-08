@@ -10,20 +10,17 @@ provider "oci" {
 resource "oci_core_vcn" "game_vcn" {
   cidr_block     = "10.0.0.0/16"
   compartment_id = var.compartment_ocid
-  display_name   = "game-server-vcn"
+  display_name   = "game-vcn"
 }
 
 resource "oci_core_internet_gateway" "ig" {
   compartment_id = var.compartment_ocid
   vcn_id         = oci_core_vcn.game_vcn.id
-  display_name   = "game-internet-gateway"
 }
 
 resource "oci_core_route_table" "rt" {
   compartment_id = var.compartment_ocid
   vcn_id         = oci_core_vcn.game_vcn.id
-  display_name   = "game-route-table"
-
   route_rules {
     destination       = "0.0.0.0/0"
     destination_type  = "CIDR_BLOCK"
@@ -31,11 +28,10 @@ resource "oci_core_route_table" "rt" {
   }
 }
 
-resource "oci_core_security_list" "game_sec_list" {
+resource "oci_core_security_list" "sec_list" {
   compartment_id = var.compartment_ocid
   vcn_id         = oci_core_vcn.game_vcn.id
-  display_name   = "game-security-list"
-
+  
   egress_security_rules {
     destination = "0.0.0.0/0"
     protocol    = "all"
@@ -67,20 +63,12 @@ resource "oci_core_security_list" "game_sec_list" {
   }
 }
 
-resource "oci_core_subnet" "game_subnet" {
+resource "oci_core_subnet" "subnet" {
   cidr_block        = "10.0.1.0/24"
   compartment_id    = var.compartment_ocid
   vcn_id            = oci_core_vcn.game_vcn.id
   route_table_id    = oci_core_route_table.rt.id
-  security_list_ids = [oci_core_security_list.game_sec_list.id]
-  display_name      = "game-public-subnet"
-}
-
-# --- Static Public IP ---
-resource "oci_core_public_ip" "reserved_ip" {
-  compartment_id = var.compartment_ocid
-  lifetime       = "RESERVED"
-  display_name   = "game-server-static-ip"
+  security_list_ids = [oci_core_security_list.sec_list.id]
 }
 
 # --- Compute Instance (PAYG Limits: 2 OCPU, 12 GB RAM) ---
@@ -95,11 +83,10 @@ data "oci_core_images" "ubuntu" {
   shape                    = "VM.Standard.A1.Flex"
 }
 
-resource "oci_core_instance" "game_server" {
+resource "oci_core_instance" "server" {
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
   compartment_id      = var.compartment_ocid
   shape               = "VM.Standard.A1.Flex"
-  display_name        = "game-server-node"
 
   shape_config {
     ocpus         = 2
@@ -107,7 +94,7 @@ resource "oci_core_instance" "game_server" {
   }
 
   create_vnic_details {
-    subnet_id        = oci_core_subnet.game_subnet.id
+    subnet_id        = oci_core_subnet.subnet.id
     assign_public_ip = true
   }
 
@@ -117,7 +104,7 @@ resource "oci_core_instance" "game_server" {
   }
 
   metadata = {
-    ssh_authorized_keys = var.ssh_public_key
+    ssh_authorized_keys = file(var.ssh_public_key_path)
   }
 }
 
@@ -125,26 +112,15 @@ resource "oci_core_instance" "game_server" {
 resource "oci_core_volume" "data_volume" {
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
   compartment_id      = var.compartment_ocid
-  display_name        = "game-data-volume"
   size_in_gbs         = 100
 }
 
 resource "oci_core_volume_attachment" "va" {
   attachment_type = "paravirtualized"
-  instance_id     = oci_core_instance.game_server.id
+  instance_id     = oci_core_instance.server.id
   volume_id       = oci_core_volume.data_volume.id
 }
 
 output "public_ip" {
-  value = oci_core_instance.game_server.public_ip
-}
-
-# --- Ansible Inventory Generation ---
-
-resource "local_file" "ansible_inventory" {
-  content = templatefile("${path.module}/../ansible/inventory.ini.tpl", {
-    public_ip = oci_core_public_ip.reserved_ip.ip_address
-    ssh_key   = "~/.ssh/id_rsa"
-  })
-  filename = "${path.module}/../ansible/inventory.ini"
+  value = oci_core_instance.server.public_ip
 }

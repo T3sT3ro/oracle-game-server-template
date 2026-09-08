@@ -7,55 +7,41 @@ networks:
 services:
   caddy:
     image: caddy:2-alpine
-    container_name: caddy_proxy
     restart: always
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile
-      - /mnt/data/caddy/data:/data
-      - /mnt/data/caddy/config:/config
+      - {{ data_mount_point }}/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - {{ data_mount_point }}/caddy/data:/data
     networks:
       - pelican-net
 
   pelican-db:
     image: mariadb:10.11
-    container_name: pelican_db
     restart: always
-    environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    env_file: .env
     volumes:
-      - /mnt/data/pelican/db:/var/lib/mysql
+      - {{ data_mount_point }}/pelican/db:/var/lib/mysql
     networks:
       - pelican-net
 
   pelican-redis:
     image: redis:7-alpine
-    container_name: pelican_redis
     restart: always
     networks:
       - pelican-net
 
   pelican-panel:
     image: ghcr.io/pelican-dev/panel:latest
-    container_name: pelican_panel
     restart: always
-    ports:
-      - "8080:80"
+    env_file: .env
     environment:
       APP_ENV: production
-      APP_URL: ${APP_URL}
       DB_HOST: pelican-db
-      DB_DATABASE: ${MYSQL_DATABASE}
-      DB_USERNAME: ${MYSQL_USER}
-      DB_PASSWORD: ${MYSQL_PASSWORD}
       REDIS_HOST: pelican-redis
     volumes:
-      - /mnt/data/pelican/var:/app/var
+      - {{ data_mount_point }}/pelican/var:/app/var
     depends_on:
       - pelican-db
       - pelican-redis

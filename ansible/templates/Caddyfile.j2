@@ -1,0 +1,6 @@
+panel.{{ domain_name }} {
+    reverse_proxy pelican-panel:8080
+}
+web.{{ domain_name }} {
+    respond "Web service active." 200
+}
