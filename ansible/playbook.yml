@@ -43,6 +43,31 @@
         state: directory
       loop: [caddy, caddy/data, pelican/db, pelican/var, app]
 
+    - name: Check Caddyfile path status
+      stat:
+        path: "{{ data_mount_point }}/caddy/Caddyfile"
+      register: caddyfile_stat
+
+    - name: Remove Caddyfile if it was created as a directory
+      file:
+        path: "{{ data_mount_point }}/caddy/Caddyfile"
+        state: absent
+      when: caddyfile_stat.stat.exists and caddyfile_stat.stat.isdir
+
+    - name: Template Caddy proxy rules
+      template:
+        src: templates/Caddyfile.j2
+        dest: "{{ data_mount_point }}/caddy/Caddyfile"
+        mode: '0644'
+
+    - name: Ensure correct permissions on Pelican persistent directory
+      file:
+        path: "{{ data_mount_point }}/pelican/var"
+        state: directory
+        owner: "82" # www-data inside alpine/pelican image
+        group: "82"
+        mode: '0775'
+  
     - name: Add Docker GPG key
       get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
