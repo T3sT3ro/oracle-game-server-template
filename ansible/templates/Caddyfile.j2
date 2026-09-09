@@ -1,6 +1,17 @@
 panel.{{ domain_name }} {
-    reverse_proxy pelican-panel:8080
+    tls internal
+    root * /app/public
+    encode gzip
+    php_fastcgi pelican-panel:9000
+    file_server
 }
+
 web.{{ domain_name }} {
-    respond "Web service active." 200
+    tls internal
+    respond "Web node active" 200
+}
+
+logs.{{ domain_name }} {
+    tls internal
+    reverse_proxy dozzle:8080
 }

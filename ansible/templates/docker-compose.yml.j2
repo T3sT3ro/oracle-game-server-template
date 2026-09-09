@@ -1,8 +1,9 @@
-version: '3.8'
-
 networks:
   pelican-net:
     driver: bridge
+
+volumes:
+  pelican-code:
 
 services:
   caddy:
@@ -14,6 +15,7 @@ services:
     volumes:
       - {{ data_mount_point }}/caddy/Caddyfile:/etc/caddy/Caddyfile
       - {{ data_mount_point }}/caddy/data:/data
+      - pelican-code:/app:ro
     networks:
       - pelican-net
 
@@ -25,9 +27,10 @@ services:
       - {{ data_mount_point }}/pelican/db:/var/lib/mysql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 90s
     networks:
       - pelican-net
 
@@ -46,12 +49,29 @@ services:
       BEHIND_PROXY: "true"
       LETSENCRYPT_EMAIL: "admin@{{ domain_name }}"
       DB_CONNECTION: "mysql"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
+      - pelican-code:/app
       - {{ data_mount_point }}/pelican/var:/app/var
     depends_on:
       pelican-db:
         condition: service_healthy
       pelican-redis:
         condition: service_started
+    networks:
+      - pelican-net
+
+  dozzle:
+    image: amir20/dozzle:latest
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      DOZZLE_NO_ANALYTICS: "true"
     networks:
       - pelican-net
