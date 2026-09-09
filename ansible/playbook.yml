@@ -156,3 +156,10 @@
       command: docker compose up -d
       args:
         chdir: "{{ data_mount_point }}/app"
+
+    - name: Run Pelican Database Migrations
+      command: docker exec app-pelican-panel-1 php artisan migrate --force
+      register: migration_result
+      until: migration_result.rc == 0
+      retries: 6
+      delay: 10
