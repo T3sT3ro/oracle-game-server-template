@@ -2,9 +2,6 @@ networks:
   pelican-net:
     driver: bridge
 
-volumes:
-  pelican-code:
-
 services:
   caddy:
     image: caddy:2-alpine
@@ -15,7 +12,9 @@ services:
     volumes:
       - {{ data_mount_point }}/caddy/Caddyfile:/etc/caddy/Caddyfile
       - {{ data_mount_point }}/caddy/data:/data
-      - pelican-code:/app:ro
+    depends_on:
+      pelican-panel:
+        condition: service_healthy
     networks:
       - pelican-net
 
@@ -47,16 +46,16 @@ services:
     environment:
       APP_BEHIND_PROXY: "true"
       BEHIND_PROXY: "true"
+      TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       LETSENCRYPT_EMAIL: "admin@{{ domain_name }}"
       DB_CONNECTION: "mysql"
     healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000 || exit 1"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
     volumes:
-      - pelican-code:/app
       - {{ data_mount_point }}/pelican/var:/app/var
     depends_on:
       pelican-db:

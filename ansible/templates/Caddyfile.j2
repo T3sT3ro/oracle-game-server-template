@@ -1,9 +1,6 @@
 panel.{{ domain_name }} {
     tls internal
-    root * /app/public
-    encode gzip
-    php_fastcgi pelican-panel:9000
-    file_server
+    reverse_proxy pelican-panel:80
 }
 
 web.{{ domain_name }} {
