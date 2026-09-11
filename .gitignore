@@ -8,6 +8,7 @@
 # Ansible Secrets & Keys
 ansible/inventory.ini
 ansible/group_vars/all/vault.yml
+ansible/group_vars/all/vars.yml
 ansible/.vault_pass
 *.pem
 *.key
