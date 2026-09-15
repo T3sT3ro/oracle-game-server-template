@@ -163,3 +163,17 @@
       until: migration_result.rc == 0
       retries: 6
       delay: 10
+
+    # 2. Create Admin User (Non-interactively)
+    - name: Create Pelican Admin User
+      command: >
+        docker exec app-pelican-panel-1 php artisan p:user:make
+        --email="admin@{{ domain_name }}"
+        --username="admin"
+        --firstname="Admin"
+        --lastname="System"
+        --password="{{ vault_admin_password }}"
+        --admin=1
+      register: admin_create
+      changed_when: "'User created' in admin_create.stdout"
+      failed_when: false
