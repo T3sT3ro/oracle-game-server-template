@@ -16,8 +16,9 @@ ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
     -i "oci_test_node," \
     -c docker \
     -u root \
-    --ask-vault-pass \
+    --vault-pass-file .vault_pass \
     playbook.yml
+    # --ask-vault-pass \
 cd ..
 
 echo "==> Local deployment succeeded!"
