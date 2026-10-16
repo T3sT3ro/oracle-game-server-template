@@ -25,4 +25,4 @@ ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
     --ask-vault-pass \
     playbook.yml
 
-echo "==> Deployment complete!"
+echo "==> Deployment complete! Access your panel to complete the OOBE setup wizard."

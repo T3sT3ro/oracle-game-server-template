@@ -1,5 +1,5 @@
 networks:
-  pelican-net:
+  calagopus-net:
     driver: bridge
 
 services:
@@ -13,17 +13,17 @@ services:
       - {{ data_mount_point }}/caddy/Caddyfile:/etc/caddy/Caddyfile
       - {{ data_mount_point }}/caddy/data:/data
     depends_on:
-      pelican-panel:
-        condition: service_healthy
+      calagopus-panel:
+        condition: service_started
     networks:
-      - pelican-net
+      - calagopus-net
 
-  pelican-db:
+  calagopus-db:
     image: mariadb:10.11
     restart: always
     env_file: .env
     volumes:
-      - {{ data_mount_point }}/pelican/db:/var/lib/mysql
+      - {{ data_mount_point }}/calagopus/db:/var/lib/mysql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -31,39 +31,19 @@ services:
       retries: 5
       start_period: 90s
     networks:
-      - pelican-net
+      - calagopus-net
 
-  pelican-redis:
-    image: redis:7-alpine
-    restart: always
-    networks:
-      - pelican-net
-
-  pelican-panel:
-    image: ghcr.io/pelican/panel:latest
+  calagopus-panel:
+    image: ghcr.io/calagopus/panel:latest
     restart: always
     env_file: .env
-    environment:
-      APP_BEHIND_PROXY: "true"
-      BEHIND_PROXY: "true"
-      TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-      LETSENCRYPT_EMAIL: "admin@{{ domain_name }}"
-      DB_CONNECTION: "mysql"
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 80 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
     volumes:
-      - {{ data_mount_point }}/pelican/var:/app/var
+      - {{ data_mount_point }}/calagopus/var:/app/var
     depends_on:
-      pelican-db:
+      calagopus-db:
         condition: service_healthy
-      pelican-redis:
-        condition: service_started
     networks:
-      - pelican-net
+      - calagopus-net
 
   dozzle:
     image: amir20/dozzle:latest
@@ -73,4 +53,4 @@ services:
     environment:
       DOZZLE_NO_ANALYTICS: "true"
     networks:
-      - pelican-net
+      - calagopus-net
