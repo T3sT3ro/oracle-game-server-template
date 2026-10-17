@@ -1,0 +1,11 @@
+# Internal Docker addressing. You normally never need to change this.
+#
+# "web" is the one network that Caddy, the panel and your own apps share. Caddy has a fixed
+# address so the panel can trust exactly Caddy (and nothing else) to tell it visitor IPs.
+# These ranges stay clear of Wings' game network (172.18.0.0/16) and the cloud network (10.0.0.0/16).
+web_network: web
+web_subnet: 10.210.1.0/24
+# Docker gives containers automatic addresses only from this upper half, so the fixed
+# addresses below it (like Caddy's) are never taken by another container.
+web_ip_range: 10.210.1.128/25
+caddy_ip: 10.210.1.2

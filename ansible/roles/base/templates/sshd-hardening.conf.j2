@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+# SSH is only reachable over Tailscale (and OCI Bastion from inside the VCN).
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AllowUsers ubuntu
+X11Forwarding no
+AllowAgentForwarding no
+# Local forwards stay allowed for ad-hoc `ssh -L` debugging.
+AllowTcpForwarding local
+MaxAuthTries 3
+LoginGraceTime 20
+ClientAliveInterval 300
+ClientAliveCountMax 2

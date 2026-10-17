@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+# Read by the Beszel hub on every start. Systems missing from this file are deleted.
+systems:
+  - name: "{{ observability_beszel_system_name }}"
+    host: /beszel_socket/beszel.sock
+    port: 45876
+    users:
+      - "{{ observability_beszel_admin_email }}"

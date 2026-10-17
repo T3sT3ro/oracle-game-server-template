@@ -17,3 +17,6 @@ ansible/.vault_pass
 # Runtime Environment Files
 .env
 .direnv
+# Tooling caches / transient plans
+.ansible/
+oci/tfplan

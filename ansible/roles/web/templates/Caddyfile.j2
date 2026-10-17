@@ -1,0 +1,72 @@
+# {{ ansible_managed }}
+# Generated from `sites:` in vars.yml. Caddy gets an HTTPS certificate for every hostname
+# below automatically, as long as the hostname's DNS points at this server.
+{
+	email {{ acme_email }}
+{% if acme_staging | bool %}
+	acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+{% endif %}
+	servers {
+		# No HTTP/3: the cloud firewall only opens 443/tcp.
+		protocols h1 h2
+	}
+}
+
+# Shared by every site: access log (for the Grafana security dashboard) and safe headers.
+(common) {
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		# Download tokens in links are hidden in the log.
+		format filter {
+			fields {
+				request>uri query {
+					replace token REDACTED
+				}
+			}
+			wrap json
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+}
+
+# The game panel.
+{{ panel_hostname }} {
+	import common
+	# Biggest upload the panel accepts, except Wings backup uploads.
+	@limited not path /api/remote/backups/*
+	request_body @limited {
+		max_size 128MiB
+	}
+	header Permissions-Policy "camera=(), microphone=(), geolocation=(), fullscreen=(self), clipboard-read=(self)"
+	# No compression here: the panel streams consoles, uploads and big downloads.
+	reverse_proxy panel:8000
+}
+{% for site in sites | default([]) %}
+
+{{ site.host }} {
+	import common
+{% if site.static is defined %}
+	# Static website: files in {{ web_sites_dir }}/{{ site.static }} (scripts/publish-site.sh).
+	root * /srv/sites/{{ site.static }}
+	encode zstd gzip
+	file_server
+	handle_errors 404 {
+		rewrite * /404.html
+		file_server
+	}
+{% elif site.proxy is defined %}
+	reverse_proxy {{ site.proxy }}
+{% elif site.redirect is defined %}
+	redir {{ site.redirect }}{uri} permanent
+{% endif %}
+}
+{% endfor %}

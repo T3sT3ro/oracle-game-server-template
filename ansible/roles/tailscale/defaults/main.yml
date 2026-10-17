@@ -1,0 +1,5 @@
+# Admin UIs listen on 127.0.0.1 only and are reachable solely through these tailnet ports.
+# Not 443: keep the tailnet listeners clearly separate from Caddy's public 443.
+tailscale_serve:
+  - { port: 8443, target: "http://127.0.0.1:3000" }   # Grafana (logs, security dashboards)
+  - { port: 8444, target: "http://127.0.0.1:8090" }   # Beszel (health, alerts)

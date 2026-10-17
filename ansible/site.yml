@@ -1,0 +1,26 @@
+- name: Configure Calagopus game server
+  hosts: gameserver
+  become: true
+
+  pre_tasks:
+    - name: Check required secrets are present in the vault
+      ansible.builtin.assert:
+        that:
+          - vault_calagopus_encryption_key | default('') | length >= 32
+          - vault_postgres_password | default('') | length >= 24
+          - vault_valkey_password | default('') | length >= 24
+          - vault_calagopus_admin_password | default('') | length >= 16
+          - vault_grafana_admin_password | default('') | length >= 16
+          - vault_beszel_admin_password | default('') | length >= 16
+        fail_msg: "Vault is missing or has weak secrets. Run scripts/init-vault.sh first."
+        quiet: true
+
+  roles:
+    - { role: base, tags: [base] }
+    - { role: storage, tags: [storage] }
+    - { role: docker, tags: [docker] }
+    - { role: firewall, tags: [firewall] }
+    - { role: tailscale, tags: [tailscale] }
+    - { role: calagopus, tags: [calagopus] }
+    - { role: web, tags: [web] } # Caddy: panel, websites, apps. After calagopus on purpose.
+    - { role: observability, tags: [observability] }

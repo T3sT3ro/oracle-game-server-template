@@ -1,0 +1,5 @@
+web_stack_dir: /opt/stacks/web
+web_apps_dir: /opt/stacks/apps
+web_sites_dir: "{{ data_mount_point }}/sites"
+
+# Your websites (`sites:`) and apps (`apps:`) are set in vars.yml; see the README.

@@ -1,2 +1,36 @@
+# Copy to vars.yml (gitignored) and adjust. Secrets go in vault.yml (see scripts/init-vault.sh).
+
 domain_name: "example.com"
+panel_hostname: "panel.{{ domain_name }}"
+acme_email: "admin@example.com"
+# Use Let's Encrypt staging while DNS/firewall are being sorted out, to avoid rate limits.
+acme_staging: false
+timezone: "Europe/Warsaw"
+
+# Block volume (see oci/storage.tf). Mounted by label with project quotas for Wings.
+data_block_device: "/dev/oracleoci/oraclevdb"
+data_fs_label: "gamedata"
 data_mount_point: "/mnt/data"
+
+# Tailscale: the node joins as this hostname with these tags (tags must exist in the tailnet policy).
+tailscale_hostname: "calagopus"
+tailscale_tags: ["tag:gameserver"]
+
+# First panel admin, created headlessly before the panel is exposed. Password lives in the vault.
+calagopus_admin_username: "admin"
+calagopus_admin_email: "admin@example.com"
+
+# Websites. Caddy gets HTTPS for each host automatically once its DNS points at the server.
+# Each site uses exactly one of:
+#   static:   a folder of files (upload with scripts/publish-site.sh <name> <folder>)
+#   proxy:    an app container on the web network ("name:port"), or a game server's
+#             web port such as Dynmap ("172.18.0.1:<port>", see the README)
+#   redirect: send visitors to another address
+sites:
+  - { host: "{{ domain_name }}", static: blog }
+  - { host: "www.{{ domain_name }}", redirect: "https://{{ domain_name }}" }
+  # - { host: "app.{{ domain_name }}", proxy: "myapp:3000" }
+  # - { host: "survival.minecraft.{{ domain_name }}", proxy: "172.18.0.1:25501" }
+
+# Apps: folder names in apps/ (each has a compose.yml). See apps/example/.
+apps: []

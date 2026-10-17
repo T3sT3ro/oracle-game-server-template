@@ -13,7 +13,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [ terraform ansible ansible-lint openssh jq ];
+          buildInputs = with pkgs; [ terraform ansible ansible-lint openssh jq shellcheck oci-cli ];
         };
       }
     );

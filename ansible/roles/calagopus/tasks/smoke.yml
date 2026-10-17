@@ -1,0 +1,38 @@
+- name: Panel answers inside its container
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ calagopus_stack_dir }}"
+    service: panel
+    tty: false
+    argv: [curl, -fsS, -o, /dev/null, -w, "%{http_code}", "http://127.0.0.1:8000/"]
+  register: calagopus_smoke_panel
+  changed_when: false
+
+- name: Wings can manage XFS project quotas from inside the AIO container
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ calagopus_stack_dir }}"
+    service: panel
+    tty: false
+    argv: [xfs_quota, -x, -c, "state -p", "{{ calagopus_data_dir }}"]
+  register: calagopus_smoke_quota
+  changed_when: false
+  failed_when: >-
+    calagopus_smoke_quota.rc != 0 or
+    'Accounting: ON' not in calagopus_smoke_quota.stdout or
+    'Enforcement: ON' not in calagopus_smoke_quota.stdout
+  when: calagopus_wings_disk_limiter_mode == 'xfs_quota'
+
+- name: SFTP port is listening
+  ansible.builtin.wait_for:
+    port: 2022
+    host: 127.0.0.1
+    timeout: 30
+
+- name: Smoke test summary
+  ansible.builtin.debug:
+    msg:
+      - "panel (internal): {{ calagopus_smoke_panel.stdout | default('?') }}"
+      - "xfs quotas: {{ quota_state }}"
+  vars:
+    quota_state: >-
+      {{ 'skipped' if calagopus_smoke_quota is skipped
+         else ('ok' if calagopus_smoke_quota is succeeded else 'FAILED') }}

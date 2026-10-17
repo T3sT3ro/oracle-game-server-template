@@ -1,0 +1,98 @@
+- name: Add Tailscale apt key
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_facts.distribution_release }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: "0644"
+
+- name: Add Tailscale apt repository
+  ansible.builtin.deb822_repository:
+    name: tailscale
+    types: [deb]
+    uris: https://pkgs.tailscale.com/stable/ubuntu
+    suites: ["{{ ansible_facts.distribution_release }}"]
+    components: [main]
+    signed_by: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    state: present
+    install_python_debian: true
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    update_cache: true
+
+- name: Ensure tailscaled is running
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    state: started
+    enabled: true
+
+- name: Read Tailscale state
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status_raw
+  changed_when: false
+  failed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Join the tailnet when not logged in
+  when: (tailscale_status_raw.stdout | default('{}') | from_json).BackendState | default('') != 'Running'
+  block:
+    - name: Require an auth key for the first join
+      ansible.builtin.assert:
+        that: vault_tailscale_authkey | default('') | length > 0
+        fail_msg: "Node is not on the tailnet yet: add vault_tailscale_authkey (scripts/init-vault.sh)."
+        quiet: true
+
+    # Passed as file: so the key never shows up in the process list.
+    - name: Write one-off auth key
+      ansible.builtin.copy:
+        dest: /run/tailscale-authkey
+        content: "{{ vault_tailscale_authkey }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Tailscale up
+      ansible.builtin.command: >-
+        tailscale up
+        --auth-key=file:/run/tailscale-authkey
+        --hostname={{ tailscale_hostname }}
+        --advertise-tags={{ tailscale_tags | join(',') }}
+        --ssh=false
+      changed_when: true
+  always:
+    - name: Remove auth key file
+      ansible.builtin.file:
+        path: /run/tailscale-authkey
+        state: absent
+
+- name: Read Tailscale state after join
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status_after
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Record tailnet identity
+  ansible.builtin.set_fact:
+    tailscale_status: "{{ tailscale_status_after.stdout | from_json }}"
+
+- name: Expose MagicDNS name to later roles
+  ansible.builtin.set_fact:
+    tailscale_dns_name: "{{ tailscale_status.Self.DNSName | regex_replace('\\.$', '') }}"
+
+# `tailscale serve` starts an interactive consent flow (and the play would hang) when the
+# tailnet has HTTPS certificates disabled, so check first.
+- name: Require MagicDNS + HTTPS certificates in the tailnet
+  ansible.builtin.assert:
+    that: tailscale_status.CertDomains | default([]) | length > 0
+    fail_msg: >-
+      Enable MagicDNS and HTTPS Certificates in the Tailscale admin console
+      (DNS page), then re-run with --tags tailscale.
+
+# Idempotent: re-running with the same port and target changes nothing.
+- name: Publish admin UIs on the tailnet over HTTPS
+  ansible.builtin.command: >-
+    timeout 30 tailscale serve --bg --yes --https={{ item.port }} {{ item.target }}
+  loop: "{{ tailscale_serve }}"
+  loop_control:
+    label: "https://{{ tailscale_dns_name }}:{{ item.port }} -> {{ item.target }}"
+  changed_when: false

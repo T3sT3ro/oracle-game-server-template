@@ -1,0 +1,48 @@
+- name: Add Docker apt key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add Docker apt repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: https://download.docker.com/linux/ubuntu
+    suites: ["{{ ansible_facts.distribution_release }}"]
+    components: [stable]
+    architectures: ["{{ 'arm64' if ansible_facts.architecture == 'aarch64' else 'amd64' }}"]
+    signed_by: /etc/apt/keyrings/docker.asc
+    state: present
+    install_python_debian: true
+
+# Upgrades come from unattended-upgrades (Docker origin), not from re-running the playbook.
+- name: Install Docker Engine and Compose
+  ansible.builtin.apt:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+    state: present
+    update_cache: true
+
+- name: Configure Docker daemon
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: "{{ docker_daemon_config | to_nice_json }}\n"
+  notify: Restart docker
+
+- name: Ensure Docker is running and enabled
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Apply daemon config before stacks start
+  ansible.builtin.meta: flush_handlers
+
+# Shared by Caddy, the panel and your apps (see group_vars/all/network.yml).
+- name: Create the shared web network
+  ansible.builtin.shell: >-
+    docker network inspect {{ web_network }} >/dev/null 2>&1
+    || docker network create --subnet {{ web_subnet }} --ip-range {{ web_ip_range }} {{ web_network }}
+  register: docker_web_network
+  changed_when: docker_web_network.stdout | length > 0 # `create` prints the new network's id

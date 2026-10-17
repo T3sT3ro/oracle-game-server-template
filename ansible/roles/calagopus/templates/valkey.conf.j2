@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+bind * -::*
+port 6379
+protected-mode yes
+requirepass {{ vault_valkey_password }}
+dir /data
+save 60 1
+appendonly no

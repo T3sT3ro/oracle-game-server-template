@@ -1,0 +1,12 @@
+docker_daemon_config:
+  # Bounded, compressed container logs (Alloy ships them to Loki for retention).
+  log-driver: local
+  log-opts:
+    max-size: 20m
+    max-file: "5"
+  # Keep compose networks away from Wings' calagopus_nw (172.18.0.0/16) and the VCN (10.0.0.0/16).
+  default-address-pools:
+    - base: 10.211.0.0/16
+      size: 24
+  # Game servers keep running while dockerd restarts (e.g. unattended Docker upgrades).
+  live-restore: true

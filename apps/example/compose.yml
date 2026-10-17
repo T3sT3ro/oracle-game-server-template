@@ -1,0 +1,31 @@
+# Example app: copy this folder to apps/<your-app>/ and change it.
+#
+# To turn it on:
+#   1. In ansible/group_vars/all/vars.yml add the folder name to `apps:` and a site that
+#      points at it, e.g.  - { host: "hello.{{ domain_name }}", proxy: "example:80" }
+#   2. Point the hostname's DNS at the server.
+#   3. Run: ./deploy.sh configure --tags web
+#
+# Rules that keep the server safe and tidy:
+#   - Join the "web" network and don't publish ports: Caddy reaches the app by its service
+#     name (here "example") and handles HTTPS.
+#   - Pin the image (tag + digest) so it never changes by surprise.
+#   - Keep data under /mnt/data/apps/<your-app>/ so it's on the data volume (and in backups).
+#   - Set a memory limit so the app can't starve the game servers.
+#   - Secrets: put them in the vault as vault_app_env: { <your-app>: { KEY: value } }.
+#     Ansible writes them to secrets.env next to this file; load it with `env_file`.
+
+services:
+  example:
+    image: traefik/whoami:v1.11.0@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab
+    restart: unless-stopped
+    mem_limit: 128m
+    security_opt: ["no-new-privileges:true"]
+    networks: [web]
+    # env_file: [secrets.env]
+    # volumes:
+    #   - /mnt/data/apps/example:/data
+
+networks:
+  web:
+    external: true

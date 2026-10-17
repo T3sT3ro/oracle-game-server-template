@@ -1,0 +1,96 @@
+// {{ ansible_managed }}
+// Ships container stdout, Caddy access logs, Wings logs and the systemd journal to Loki.
+
+// ---- Docker containers (panel, game servers, everything else) via the read-only proxy ----
+discovery.docker "containers" {
+  host = "tcp://socket-proxy:2375"
+}
+
+loki.relabel "docker" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  // tcp:// (not http://) so long-lived log streams aren't cut by a client timeout.
+  host          = "tcp://socket-proxy:2375"
+  targets       = discovery.docker.containers.targets
+  labels        = { "job" = "docker" }
+  relabel_rules = loki.relabel.docker.rules
+  forward_to    = [loki.write.local.receiver]
+}
+
+// ---- Caddy JSON access log (security dashboards: IPs, statuses, login failures) ----
+local.file_match "caddy" {
+  path_targets = [{ "__path__" = "/var/log/caddy/access.log", "job" = "caddy" }]
+}
+
+loki.source.file "caddy" {
+  targets    = local.file_match.caddy.targets
+  forward_to = [loki.process.caddy.receiver]
+}
+
+loki.process "caddy" {
+  stage.json {
+    expressions = { "ts" = "ts" }
+  }
+
+  stage.timestamp {
+    source = "ts"
+    format = "Unix"
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+// ---- Wings logs on the data volume (installs, daemon) ----
+local.file_match "wings" {
+  path_targets = [{ "__path__" = "/var/log/wings/**/*.log", "job" = "wings" }]
+}
+
+loki.source.file "wings" {
+  targets    = local.file_match.wings.targets
+  forward_to = [loki.write.local.receiver]
+}
+
+// ---- systemd journal (sshd, tailscaled, docker, unattended-upgrades, kernel) ----
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "syslog_identifier"
+  }
+}
+
+loki.source.journal "host" {
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { "job" = "journal" }
+  forward_to    = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

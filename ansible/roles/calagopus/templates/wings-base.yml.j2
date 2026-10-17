@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# Base config for the Wings bundled in the AIO image. The panel adds uuid/token/remote/api
+# on every start. Reference: https://calagopus.com/docs/wings/configuration
+app_name: Calagopus
+system:
+  # On the block volume; mounted into the container at the same path (see compose.yml).
+  root_directory: {{ calagopus_data_dir }}/wings/lib
+  log_directory: {{ calagopus_data_dir }}/wings/log
+  disk_limiter_mode: {{ calagopus_wings_disk_limiter_mode }}
+  websocket:
+    max_connections_total: {{ calagopus_wings_websocket_max_connections }}

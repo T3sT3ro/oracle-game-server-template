@@ -1,0 +1,15 @@
+# Shape of ansible/group_vars/all/vault.yml (encrypted with ansible-vault, gitignored).
+# Don't fill this in by hand: scripts/init-vault.sh generates every random value and
+# only prompts for the Tailscale auth key.
+
+# Encrypts node tokens, OAuth secrets, backup credentials and TOTP seeds in the panel DB.
+# Keep a copy in a password manager, separate from database backups.
+vault_calagopus_encryption_key: "<64 hex chars>"
+vault_postgres_password: "<hex>"
+vault_valkey_password: "<hex>"
+vault_calagopus_admin_password: "<random>"
+vault_grafana_admin_password: "<random>"
+vault_beszel_admin_password: "<random>"
+# One-off, pre-approved, tagged (tag:gameserver) auth key from the Tailscale admin console.
+# Only needed until the node has joined.
+vault_tailscale_authkey: "tskey-auth-..."

@@ -1,0 +1,92 @@
+- name: Check every site has a host and exactly one of static / proxy / redirect
+  ansible.builtin.assert:
+    that:
+      - item.host is defined
+      - (['static', 'proxy', 'redirect'] | select('in', item) | list | length) == 1
+    fail_msg: "Site '{{ item.host | default('?') }}' in vars.yml: set exactly one of static, proxy or redirect."
+    quiet: true
+  loop: "{{ sites | default([]) }}"
+  loop_control:
+    label: "{{ item.host | default('?') }}"
+
+- name: Create web directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ web_stack_dir }}", mode: "0750" }
+    - { path: "{{ web_apps_dir }}", mode: "0750" }
+    - { path: "{{ data_mount_point }}/caddy/data", mode: "0700" }
+    - { path: "{{ data_mount_point }}/caddy/config", mode: "0700" }
+    - { path: "{{ data_mount_point }}/caddy/logs", mode: "0755" }
+    - { path: "{{ web_sites_dir }}", mode: "0755" }
+
+# Owned by the ubuntu user, so scripts/publish-site.sh can upload without sudo.
+- name: Create a folder for each static site
+  ansible.builtin.file:
+    path: "{{ web_sites_dir }}/{{ item.static }}"
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0755"
+  loop: "{{ sites | default([]) | selectattr('static', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.host }}"
+
+- name: Template Caddy config
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ web_stack_dir }}/{{ item }}"
+    mode: "0644"
+  loop: [compose.yml, Caddyfile]
+
+- name: Validate Caddyfile
+  ansible.builtin.command: >-
+    docker run --rm -v {{ web_stack_dir }}/Caddyfile:/etc/caddy/Caddyfile:ro
+    {{ images.caddy }} caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+# Your apps start before Caddy, so their sites work as soon as Caddy is up.
+- name: Deploy apps
+  ansible.builtin.include_tasks: apps.yml
+  when: apps | default([]) | length > 0
+
+# ---- Caddy ----------------------------------------------------------------------------------
+# Runs after the calagopus role, so a fresh panel is never reachable before its admin exists.
+
+- name: Start Caddy
+  community.docker.docker_compose_v2:
+    project_src: "{{ web_stack_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: true
+    wait_timeout: 120
+
+- name: Caddy redirects plain HTTP to HTTPS
+  ansible.builtin.uri:
+    url: http://127.0.0.1/
+    headers:
+      Host: "{{ panel_hostname }}"
+    follow_redirects: none
+    status_code: [301, 308]
+  check_mode: false # read-only; must also run during --check
+
+- name: Check HTTPS for every hostname (fails until its DNS points here)
+  ansible.builtin.uri:
+    url: "https://{{ item }}/"
+    validate_certs: "{{ not (acme_staging | bool) }}"
+    follow_redirects: none
+    status_code: [200, 301, 302, 308, 404]
+  loop: "{{ [panel_hostname] + (sites | default([]) | map(attribute='host') | list) }}"
+  register: web_https
+  failed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: HTTPS summary
+  ansible.builtin.debug:
+    msg: "{{ web_https.results | map(attribute='item') | zip(web_https.results | map(attribute='status', default='?')) | map('join', ': ') | list }}"

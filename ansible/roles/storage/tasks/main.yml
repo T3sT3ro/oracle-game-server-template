@@ -1,0 +1,81 @@
+- name: Wait for the data block volume
+  ansible.builtin.wait_for:
+    path: "{{ data_block_device }}"
+    timeout: 60
+  register: storage_device_wait
+  ignore_errors: true
+
+- name: Refuse to continue without the data volume (would silently fill the boot disk)
+  ansible.builtin.assert:
+    that: storage_device_wait is succeeded
+    fail_msg: >-
+      {{ data_block_device }} is missing. Check the volume attachment in oci/storage.tf
+      (consistent device path) and re-run terraform apply.
+
+- name: Read existing filesystem on the data volume
+  ansible.builtin.command: blkid -o export {{ data_block_device }}
+  register: storage_blkid
+  changed_when: false
+  failed_when: storage_blkid.rc not in [0, 2] # 2 = no filesystem yet
+  check_mode: false # read-only; must also run during --check
+
+- name: Refuse to touch a volume that holds a foreign filesystem
+  ansible.builtin.assert:
+    that: >-
+      storage_blkid.rc == 2 or
+      ('TYPE=xfs' in storage_blkid.stdout_lines and ('LABEL=' ~ data_fs_label) in storage_blkid.stdout_lines)
+    fail_msg: >-
+      {{ data_block_device }} already has a filesystem that is not XFS labelled
+      '{{ data_fs_label }}'. Inspect it manually; this role never reformats.
+
+- name: Create XFS filesystem on the empty data volume
+  community.general.filesystem:
+    fstype: xfs
+    dev: "{{ data_block_device }}"
+    opts: "-L {{ data_fs_label }}"
+  when: storage_blkid.rc == 2
+
+- name: Mount data volume by label with project quotas
+  ansible.posix.mount:
+    path: "{{ data_mount_point }}"
+    src: "LABEL={{ data_fs_label }}"
+    fstype: xfs
+    # nofail keeps the host bootable if the attachment is late/missing; docker.service
+    # refuses to start without the mount (drop-in below), so nothing writes to the boot disk.
+    opts: defaults,prjquota,nofail
+    state: mounted
+
+- name: Read mount options
+  ansible.builtin.command: findmnt -no FSTYPE,OPTIONS {{ data_mount_point }}
+  register: storage_mount_opts
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Check project quotas are active (Wings xfs_quota disk limiter)
+  ansible.builtin.assert:
+    that:
+      - storage_mount_opts.stdout.startswith('xfs')
+      - "'prjquota' in storage_mount_opts.stdout"
+    fail_msg: >-
+      {{ data_mount_point }} is mounted without prjquota ({{ storage_mount_opts.stdout }}).
+      XFS can't enable quotas on remount: run `umount {{ data_mount_point }} && mount {{ data_mount_point }}`.
+
+- name: Create docker.service drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: "0755"
+
+- name: Make docker.service require the data mount
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/10-require-data.conf
+    mode: "0644"
+    content: |
+      # {{ ansible_managed }}
+      [Unit]
+      RequiresMountsFor={{ data_mount_point }}
+  register: storage_docker_dropin
+  notify: Reload systemd
+
+- name: Ensure systemd sees the docker drop-in before Docker is installed/started
+  ansible.builtin.meta: flush_handlers

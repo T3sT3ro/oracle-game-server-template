@@ -1,0 +1,12 @@
+// {{ ansible_managed }}
+// Ubuntu security updates are enabled by 50unattended-upgrades; add the third-party repos
+// whose packages sit on the attack surface (container runtime, VPN).
+// Note: a Docker upgrade restarts dockerd; live-restore keeps containers running.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Docker,codename=${distro_codename}";
+        "origin=Tailscale";
+};
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "{{ base_unattended_reboot_time }}";

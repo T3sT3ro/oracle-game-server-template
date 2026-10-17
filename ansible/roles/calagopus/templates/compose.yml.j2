@@ -1,0 +1,111 @@
+# {{ ansible_managed }}
+name: calagopus
+
+# Each service carries a hash of its config files as a label. When a file changes, the label
+# changes and `docker compose up` recreates just that container. (Config files are
+# bind-mounted, so a running container would otherwise keep reading the old file.)
+
+services:
+  panel:
+    image: "{{ images.calagopus_panel }}"
+    restart: unless-stopped
+    stop_grace_period: 40s # the panel's shutdown handlers need longer than Docker's 10s
+    # The AIO rewrites its base Wings config on start (injects fresh node tokens), so it
+    # gets a scratch copy of the Ansible-managed base each time the container starts.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - cp /etc/calagopus-aio/wings-base.yml /wings-config.yml && exec /usr/bin/panel-rs "$$@"
+      - panel-rs
+    labels:
+      config-hash: "{{ (lookup('template', 'panel.env.j2') ~ lookup('template', 'wings-base.yml.j2')) | hash('sha256') | truncate(16, True, '') }}"
+    environment:
+      TZ: "{{ timezone }}"
+    volumes:
+      # Secrets are read from /.env (dotenv in the container's cwd), so they never show up
+      # in `docker inspect` or to anything reading the API through the socket proxy.
+      - ./panel.env:/.env:ro
+      - ./wings-base.yml:/etc/calagopus-aio/wings-base.yml:ro
+      - {{ calagopus_data_dir }}/calagopus/data:/var/lib/calagopus
+      # Wings: these paths are handed to the Docker daemon, so host and container paths must match.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/containers/:/var/lib/docker/containers/
+      - /etc/calagopus-wings/:/etc/calagopus-wings/
+      - {{ calagopus_data_dir }}/wings/lib:{{ calagopus_data_dir }}/wings/lib
+      - {{ calagopus_data_dir }}/wings/log:{{ calagopus_data_dir }}/wings/log
+{% if calagopus_wings_disk_limiter_mode == 'xfs_quota' %}
+    # xfs_quota sets limits through quotactl(), which needs CAP_SYS_ADMIN and the block device.
+    # (The container already holds the Docker socket, so this adds no real privilege.)
+    cap_add: [SYS_ADMIN]
+    devices:
+      - "{{ calagopus_data_device }}:{{ calagopus_data_device }}"
+{% endif %}
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "2022:2022" # Wings SFTP; 8000 is only reachable through Caddy
+    networks: [web, backend]
+    depends_on:
+      db: { condition: service_healthy }
+      cache: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+  db:
+    image: "{{ images.postgres }}"
+    restart: unless-stopped
+    environment:
+      TZ: "{{ timezone }}"
+      POSTGRES_USER: panel
+      POSTGRES_DB: panel
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      PGDATA: /data
+    secrets: [postgres_password]
+    volumes:
+      - {{ calagopus_data_dir }}/postgres:/data
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "panel", "-d", "panel"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+  cache:
+    image: "{{ images.valkey }}"
+    restart: unless-stopped
+    user: "999:999"
+    command: ["/usr/local/etc/valkey/valkey.conf"]
+    labels:
+      config-hash: "{{ lookup('template', 'valkey.conf.j2') | hash('sha256') | truncate(16, True, '') }}"
+    environment:
+      TZ: "{{ timezone }}"
+    volumes:
+      - ./valkey.conf:/usr/local/etc/valkey/valkey.conf:ro
+      - {{ calagopus_data_dir }}/valkey:/data
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [backend]
+    healthcheck:
+      # Without credentials a live server answers NOAUTH, which is enough to prove liveness.
+      test: ["CMD-SHELL", "valkey-cli ping 2>&1 | grep -qE 'PONG|NOAUTH'"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  web:
+    external: true # shared with Caddy and your apps (created by the docker role)
+    name: {{ web_network }}
+  backend:
+    internal: true # Postgres and Valkey get no route out
+    ipam:
+      config: [{ subnet: "{{ calagopus_backend_subnet }}" }]
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password

@@ -1,0 +1,101 @@
+# Grafana and Beszel need their public (tailnet) address for links and cookies.
+- name: Read the tailnet name
+  ansible.builtin.command: tailscale status --json
+  register: observability_tailscale_status
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Remember the tailnet name
+  ansible.builtin.set_fact:
+    observability_tailnet_name: "{{ (observability_tailscale_status.stdout | from_json).Self.DNSName | regex_replace('\\.$', '') }}"
+
+- name: Create observability directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0750') }}"
+  loop:
+    - { path: "{{ observability_stack_dir }}" }
+    - { path: "{{ observability_stack_dir }}/secrets", mode: "0700" }
+    - { path: "{{ observability_stack_dir }}/grafana/provisioning/datasources", mode: "0755" }
+    - { path: "{{ observability_stack_dir }}/grafana/provisioning/dashboards", mode: "0755" }
+    - { path: "{{ observability_stack_dir }}/grafana/dashboards", mode: "0755" }
+    - { path: "{{ observability_data_dir }}", mode: "0755" }
+    - { path: "{{ observability_data_dir }}/loki", owner: "10001", group: "10001" }
+    - { path: "{{ observability_data_dir }}/grafana", owner: "472", group: "0" }
+    - { path: "{{ observability_data_dir }}/alloy" }
+    - { path: "{{ observability_data_dir }}/beszel", mode: "0700" }
+    - { path: "{{ observability_data_dir }}/beszel-agent", mode: "0700" }
+    - { path: "{{ observability_data_dir }}/beszel-socket", mode: "0700" }
+
+# Pre-seeded hub key: the agent's KEY is known up front, so no UI pairing step.
+- name: Generate Beszel hub SSH key
+  community.crypto.openssh_keypair:
+    path: "{{ observability_data_dir }}/beszel/id_ed25519"
+    type: ed25519
+    comment: beszel-hub
+    mode: "0600"
+  register: observability_beszel_hub_key
+
+- name: Write Grafana admin password secret
+  ansible.builtin.copy:
+    dest: "{{ observability_stack_dir }}/secrets/grafana_admin_password"
+    content: "{{ vault_grafana_admin_password }}"
+    mode: "0644"
+  no_log: true
+
+- name: Template Beszel systems file (declarative; systems not listed are deleted)
+  ansible.builtin.template:
+    src: beszel-config.yml.j2
+    dest: "{{ observability_data_dir }}/beszel/config.yml"
+    mode: "0600"
+
+- name: Template stack config
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ observability_stack_dir }}/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: compose.yml.j2, dest: compose.yml }
+    - { src: loki.yaml.j2, dest: loki.yaml }
+    - { src: config.alloy.j2, dest: config.alloy }
+    - { src: grafana-datasources.yml.j2, dest: grafana/provisioning/datasources/loki.yml }
+    - { src: grafana-dashboards.yml.j2, dest: grafana/provisioning/dashboards/default.yml }
+  loop_control:
+    label: "{{ item.dest }}"
+
+# Directory mount: Grafana rescans it, no restart needed.
+- name: Install provisioned dashboards
+  ansible.builtin.copy:
+    src: security-dashboard.json
+    dest: "{{ observability_stack_dir }}/grafana/dashboards/security.json"
+    mode: "0644"
+
+- name: Start observability stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ observability_stack_dir }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: true
+    wait_timeout: 180
+
+- name: Loki is ready
+  ansible.builtin.command: >-
+    docker compose exec -T grafana wget -qO- http://loki:3100/ready
+  args:
+    chdir: "{{ observability_stack_dir }}"
+  register: observability_loki_ready
+  until: observability_loki_ready.rc == 0 and 'ready' in observability_loki_ready.stdout
+  retries: 12
+  delay: 10
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Admin UI addresses
+  ansible.builtin.debug:
+    msg:
+      - "Grafana: https://{{ observability_tailnet_name }}:8443  (admin / vault_grafana_admin_password)"
+      - "Beszel:  https://{{ observability_tailnet_name }}:8444  ({{ observability_beszel_admin_email }} / vault_beszel_admin_password)"

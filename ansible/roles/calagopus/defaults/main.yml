@@ -1,0 +1,17 @@
+calagopus_stack_dir: /opt/stacks/calagopus
+calagopus_data_dir: "{{ data_mount_point }}"
+
+# Internal network for Postgres and Valkey (see group_vars/all/network.yml for the rest).
+calagopus_backend_subnet: 10.210.2.0/24
+
+# Wings (integrated in the AIO image).
+calagopus_wings_disk_limiter_mode: xfs_quota
+calagopus_wings_websocket_max_connections: 512
+
+# Panel settings enforced on every run (security baseline). Edit here, not in the UI:
+# UI changes to these keys get reverted on the next playbook run.
+calagopus_settings:
+  "app::url": "https://{{ panel_hostname }}"
+  "app::registration_enabled": "false"
+  "app::telemetry_enabled": "false"
+  "app::two_factor_requirement": "admins"

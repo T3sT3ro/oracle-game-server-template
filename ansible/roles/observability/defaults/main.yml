@@ -1,0 +1,13 @@
+observability_stack_dir: /opt/stacks/observability
+observability_data_dir: "{{ data_mount_point }}/observability"
+observability_subnet: 10.210.3.0/24
+
+observability_loki_retention: 720h # 30 days; check disk usage in Beszel before raising
+
+# Beszel: first-boot admin (password from the vault) and the monitored system's name.
+observability_beszel_admin_email: "{{ calagopus_admin_email }}"
+observability_beszel_system_name: "{{ tailscale_hostname }}"
+
+# Loopback ports, published on the tailnet by the tailscale role.
+observability_grafana_port: 3000
+observability_beszel_port: 8090

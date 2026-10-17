@@ -1,0 +1,92 @@
+# The OCI security list is the perimeter. On the host we keep Oracle's stock
+# iptables-persistent ruleset (INPUT: SSH only; OUTPUT: metadata service locked to root)
+# and add a few rules. UFW is deliberately not used: it fights iptables-persistent and
+# Docker-published ports bypass it anyway.
+#
+# Each rule is applied live (iptables module) AND written to rules.v4 for reboots.
+# Never `netfilter-persistent save`/`reload` here: that would persist or wipe Docker's chains.
+
+- name: Remove UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: absent
+    purge: true
+
+- name: Ensure iptables-persistent is installed
+  ansible.builtin.apt:
+    name: [iptables-persistent, netfilter-persistent]
+    state: present
+
+- name: Accept host traffic from the tailnet (live)
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: tailscale0
+    jump: ACCEPT
+    action: insert
+    rule_num: 1
+    comment: tailnet
+
+- name: Accept host traffic from the tailnet (persisted)
+  ansible.builtin.lineinfile:
+    path: /etc/iptables/rules.v4
+    line: '-A INPUT -i tailscale0 -m comment --comment tailnet -j ACCEPT'
+    insertbefore: '^-A INPUT -j REJECT'
+
+- name: Allow direct Tailscale connections (live)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: udp
+    destination_port: "41641"
+    jump: ACCEPT
+    action: insert
+    rule_num: 1
+    comment: tailscale-direct
+
+- name: Allow direct Tailscale connections (persisted)
+  ansible.builtin.lineinfile:
+    path: /etc/iptables/rules.v4
+    line: '-A INPUT -p udp -m udp --dport 41641 -m comment --comment tailscale-direct -j ACCEPT'
+    insertbefore: '^-A INPUT -j REJECT'
+
+# Game servers run untrusted code. Stop containers from reaching the OCI metadata service
+# (169.254.0.0/16) except DNS, mirroring what Oracle's InstanceServices chain does for host users.
+- name: Declare DOCKER-USER chain for boot-time restore (Docker reuses it)
+  ansible.builtin.lineinfile:
+    path: /etc/iptables/rules.v4
+    line: ':DOCKER-USER - [0:0]'
+    insertafter: '^:InstanceServices'
+
+- name: Persist container metadata-service block
+  ansible.builtin.blockinfile:
+    path: /etc/iptables/rules.v4
+    marker: "# {mark} ANSIBLE MANAGED: container metadata block"
+    insertbefore: '^COMMIT'
+    block: |
+      -A DOCKER-USER -d 169.254.169.254/32 -p udp -m udp --dport 53 -j RETURN
+      -A DOCKER-USER -d 169.254.169.254/32 -p tcp -m tcp --dport 53 -j RETURN
+      -A DOCKER-USER -d 169.254.0.0/16 -m comment --comment no-container-metadata -j REJECT
+
+- name: Ensure DOCKER-USER chain exists live
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    chain_management: true
+
+- name: Block containers from the metadata service (live)
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    destination: 169.254.0.0/16
+    jump: REJECT
+    action: insert
+    rule_num: 1
+    comment: no-container-metadata
+
+- name: Allow container DNS to the OCI resolver (live, ahead of the block)
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    destination: 169.254.169.254/32
+    protocol: "{{ item }}"
+    destination_port: "53"
+    jump: RETURN
+    action: insert
+    rule_num: 1
+  loop: [udp, tcp]

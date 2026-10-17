@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+apiVersion: 1
+prune: true
+datasources:
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: true
+    editable: false
+    jsonData:
+      timeout: 60
+      maxLines: 1000

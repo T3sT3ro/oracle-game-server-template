@@ -1,0 +1,71 @@
+# Wings sets disk quotas with quotactl(), which needs the real block device inside the
+# container (for example /dev/sdb, whatever the kernel calls it today).
+- name: Find the data volume's kernel device
+  ansible.builtin.command: findmnt -no SOURCE {{ data_mount_point }}
+  register: calagopus_data_source
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Remember the data volume's kernel device
+  ansible.builtin.set_fact:
+    calagopus_data_device: "{{ calagopus_data_source.stdout | trim }}"
+
+- name: Create stack directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.owner | default('root') }}"
+    mode: "{{ item.mode | default('0750') }}"
+  loop:
+    - { path: "{{ calagopus_stack_dir }}" }
+    - { path: "{{ calagopus_stack_dir }}/secrets", mode: "0700" }
+    - { path: "/etc/calagopus-wings" }
+    - { path: "{{ calagopus_data_dir }}/calagopus/data" }
+    - { path: "{{ calagopus_data_dir }}/postgres", mode: "0700" }
+    - { path: "{{ calagopus_data_dir }}/valkey", owner: "999", mode: "0700" }
+    - { path: "{{ calagopus_data_dir }}/wings/lib", mode: "0755" }
+    - { path: "{{ calagopus_data_dir }}/wings/log", mode: "0755" }
+
+# Files inside secrets/ are world-readable so container users can read their bind mount;
+# the 0700 parent directory keeps host users out.
+- name: Write Postgres password secret
+  ansible.builtin.copy:
+    dest: "{{ calagopus_stack_dir }}/secrets/postgres_password"
+    content: "{{ vault_postgres_password }}"
+    mode: "0644"
+  no_log: true
+
+- name: Template secret-bearing config
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ calagopus_stack_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: panel.env.j2, dest: panel.env, mode: "0600" }
+    - { src: valkey.conf.j2, dest: valkey.conf, mode: "0644" }
+  loop_control:
+    label: "{{ item.dest }}"
+  no_log: true
+
+- name: Template stack config
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ calagopus_stack_dir }}/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: compose.yml.j2, dest: compose.yml }
+    - { src: wings-base.yml.j2, dest: wings-base.yml }
+  loop_control:
+    label: "{{ item.dest }}"
+
+# The panel is only reachable through Caddy, which the web role starts after this role.
+# So the admin exists, registration is off and the setup wizard is closed before the
+# first public request.
+- name: Bootstrap the panel behind closed doors
+  ansible.builtin.include_tasks: bootstrap.yml
+
+- name: Smoke test
+  ansible.builtin.include_tasks: smoke.yml
+  when: not ansible_check_mode
+  tags: [smoke]

@@ -1,0 +1,36 @@
+# Each name in `apps:` (vars.yml) is a folder in apps/ at the repo root, with a compose.yml.
+
+- name: Copy app folders
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../apps/{{ item }}/"
+    dest: "{{ web_apps_dir }}/{{ item }}/"
+    mode: "0644"
+    directory_mode: "0750"
+  loop: "{{ apps | default([]) }}"
+  register: web_app_files
+
+- name: Write app secrets from the vault (vault_app_env.<app> becomes secrets.env)
+  ansible.builtin.copy:
+    dest: "{{ web_apps_dir }}/{{ item }}/secrets.env"
+    content: |
+      {% for key, value in vault_app_env[item].items() %}
+      {{ key }}={{ value }}
+      {% endfor %}
+    mode: "0600"
+  loop: "{{ apps | default([]) }}"
+  when: item in (vault_app_env | default({}))
+  no_log: true
+
+- name: Start apps
+  community.docker.docker_compose_v2:
+    project_src: "{{ web_apps_dir }}/{{ item.item }}"
+    state: present
+    pull: missing
+    remove_orphans: true
+    # Restart the app when any of its files changed.
+    recreate: "{{ 'always' if item.changed else 'auto' }}"
+    wait: true
+    wait_timeout: 180
+  loop: "{{ web_app_files.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"

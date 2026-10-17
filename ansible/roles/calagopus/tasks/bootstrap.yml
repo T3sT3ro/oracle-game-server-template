@@ -1,0 +1,98 @@
+# Runs before Caddy exists (the web role starts it later), so nobody can reach the panel
+# until the admin exists, registration is off and the setup wizard is closed.
+
+- name: Start database, cache and panel (not yet exposed)
+  community.docker.docker_compose_v2:
+    project_src: "{{ calagopus_stack_dir }}"
+    services: [db, cache, panel]
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: true
+    wait_timeout: 300
+
+# Only rows whose value differs are written; psql then prints "INSERT 0 <rows written>".
+- name: Enforce security-relevant panel settings
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ calagopus_stack_dir }}"
+    service: db
+    tty: false
+    argv:
+      - psql
+      - -U
+      - panel
+      - -d
+      - panel
+      - -v
+      - ON_ERROR_STOP=1
+      - -c
+      - >-
+        INSERT INTO settings (key, value) VALUES
+        {% for k, v in calagopus_settings.items() %}('{{ k | replace("'", "''") }}', '{{ v | replace("'", "''") }}'){{ ',' if not loop.last }}{% endfor %}
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        WHERE settings.value IS DISTINCT FROM EXCLUDED.value
+  register: calagopus_settings_write
+  changed_when: "'INSERT 0 0' not in calagopus_settings_write.stdout"
+
+- name: Count panel users
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ calagopus_stack_dir }}"
+    service: db
+    tty: false
+    argv: [psql, -U, panel, -d, panel, -tAc, "SELECT count(*) FROM users"]
+  register: calagopus_users_count
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Create the first admin (the web wizard would hand admin to whoever loads it first)
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ calagopus_stack_dir }}"
+    service: panel
+    tty: false
+    argv:
+      - panel-rs
+      - users
+      - create
+      - --username
+      - "{{ calagopus_admin_username }}"
+      - --email
+      - "{{ calagopus_admin_email }}"
+      - --name-first
+      - Server
+      - --name-last
+      - Admin
+      - --password
+      - "{{ vault_calagopus_admin_password }}"
+      - --admin
+      - "true"
+  when: calagopus_users_count.stdout | trim | int == 0
+  no_log: true
+  changed_when: true
+
+- name: Check whether the OOBE wizard is still open
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ calagopus_stack_dir }}"
+    service: db
+    tty: false
+    argv: [psql, -U, panel, -d, panel, -tAc, "SELECT count(*) FROM settings WHERE key = 'oobe_step' AND value = ''"]
+  register: calagopus_oobe_closed
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Close the OOBE wizard
+  community.docker.docker_compose_v2_exec:
+    project_src: "{{ calagopus_stack_dir }}"
+    service: panel
+    tty: false
+    argv: [panel-rs, oobe, finish]
+  when: calagopus_oobe_closed.stdout | trim | int == 0
+  changed_when: true
+
+- name: Wait out the panel's 60s settings cache before going public
+  ansible.builtin.pause:
+    seconds: 65
+  when: >-
+    not ansible_check_mode and (
+    calagopus_settings_write is changed
+    or calagopus_users_count.stdout | trim | int == 0
+    or calagopus_oobe_closed.stdout | trim | int == 0)

@@ -1,0 +1,137 @@
+# {{ ansible_managed }}
+# Admin UIs bind to 127.0.0.1 only; the tailscale role publishes them on the tailnet.
+# Services carry a hash of their config files as a label, so `docker compose up` recreates
+# exactly the ones whose config changed.
+name: observability
+
+services:
+  # Read-only Docker API for Alloy and the Beszel agent (no raw socket for them).
+  socket-proxy:
+    image: "{{ images.socket_proxy }}"
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      INFO: 1
+      NETWORKS: 1   # Alloy discovery.docker lists networks
+      ALLOW_LOGS: 1 # /containers/{id}/logs for Alloy
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:2375:2375" # only for the host-network Beszel agent
+    read_only: true
+    tmpfs: [/run]
+    security_opt: ["no-new-privileges:true"]
+    networks: [ops]
+
+  loki:
+    image: "{{ images.loki }}"
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    labels:
+      config-hash: "{{ lookup('template', 'loki.yaml.j2') | hash('sha256') | truncate(16, True, '') }}"
+    volumes:
+      - ./loki.yaml:/etc/loki/loki.yaml:ro
+      - {{ observability_data_dir }}/loki:/loki
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [ops]
+
+  alloy:
+    image: "{{ images.alloy }}"
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/var/lib/alloy/data
+      - --disable-reporting
+      - /etc/alloy/config.alloy
+    labels:
+      config-hash: "{{ lookup('template', 'config.alloy.j2') | hash('sha256') | truncate(16, True, '') }}"
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - {{ observability_data_dir }}/alloy:/var/lib/alloy/data
+      - {{ data_mount_point }}/caddy/logs:/var/log/caddy:ro
+      - {{ data_mount_point }}/wings/log:/var/log/wings:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [loki, socket-proxy]
+    networks: [ops]
+
+  grafana:
+    image: "{{ images.grafana }}"
+    restart: unless-stopped
+    user: "472:0"
+    labels:
+      config-hash: "{{ (lookup('template', 'grafana-datasources.yml.j2') ~ lookup('template', 'grafana-dashboards.yml.j2')) | hash('sha256') | truncate(16, True, '') }}"
+    environment:
+      GF_SERVER_ROOT_URL: "https://{{ observability_tailnet_name }}:8443/"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_ANALYTICS_FEEDBACK_LINKS_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    secrets: [grafana_admin_password]
+    volumes:
+      - {{ observability_data_dir }}/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana-dashboards:ro
+    ports:
+      - "127.0.0.1:{{ observability_grafana_port }}:3000"
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [loki]
+    networks: [ops]
+
+  beszel:
+    image: "{{ images.beszel }}"
+    restart: unless-stopped
+    labels:
+      config-hash: "{{ lookup('template', 'beszel-config.yml.j2') | hash('sha256') | truncate(16, True, '') }}"
+    environment:
+      APP_URL: "https://{{ observability_tailnet_name }}:8444"
+      # First boot only: creates the admin. Change the password in the UI afterwards if you like.
+      USER_EMAIL: "{{ observability_beszel_admin_email }}"
+      USER_PASSWORD: "{{ vault_beszel_admin_password }}"
+    volumes:
+      - {{ observability_data_dir }}/beszel:/beszel_data
+      - {{ observability_data_dir }}/beszel-socket:/beszel_socket
+    ports:
+      - "127.0.0.1:{{ observability_beszel_port }}:8090"
+    security_opt: ["no-new-privileges:true"]
+    networks: [ops]
+
+  beszel-agent:
+    image: "{{ images.beszel_agent }}"
+    restart: unless-stopped
+    network_mode: host # host NIC stats
+    environment:
+      KEY: "{{ observability_beszel_hub_key.public_key }}"
+      # The hub connects to this unix socket (see beszel-config.yml): no TCP listener, no token.
+      LISTEN: /beszel_socket/beszel.sock
+      DOCKER_HOST: tcp://127.0.0.1:2375
+      DOCKER_IMAGE_CHECK: "false" # no registry lookups (and no IMAGES grant on the proxy)
+    volumes:
+      - {{ observability_data_dir }}/beszel-agent:/var/lib/beszel-agent
+      - {{ observability_data_dir }}/beszel-socket:/beszel_socket
+      # Extra filesystem → disk usage + alerts for the 150 GB data volume.
+      - {{ data_mount_point }}:/extra-filesystems/data:ro
+    security_opt: ["no-new-privileges:true"]
+    depends_on: [socket-proxy, beszel]
+
+networks:
+  ops:
+    ipam:
+      config: [{ subnet: "{{ observability_subnet }}" }]
+
+secrets:
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
