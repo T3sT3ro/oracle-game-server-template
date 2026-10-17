@@ -22,7 +22,9 @@
     - { path: "{{ calagopus_stack_dir }}/secrets", mode: "0700" }
     - { path: "/etc/calagopus-wings" }
     - { path: "{{ calagopus_data_dir }}/calagopus/data" }
-    - { path: "{{ calagopus_data_dir }}/postgres", mode: "0700" }
+    # Owned by the container users (Postgres 70, Valkey 999). If Ansible set root here,
+    # every later run would take the folder away from the running database.
+    - { path: "{{ calagopus_data_dir }}/postgres", owner: "70", mode: "0700" }
     - { path: "{{ calagopus_data_dir }}/valkey", owner: "999", mode: "0700" }
     - { path: "{{ calagopus_data_dir }}/wings/lib", mode: "0755" }
     - { path: "{{ calagopus_data_dir }}/wings/log", mode: "0755" }

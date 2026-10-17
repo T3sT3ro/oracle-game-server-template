@@ -630,6 +630,11 @@ disk.
     later breaks the panel's login to the DB, unless you first run `ALTER ROLE panel PASSWORD '…'`.
   - Local connections inside the container are trusted, which is how Ansible runs `psql`
     without a password.
+  - Its data folder `/mnt/data/postgres` is owned by **uid/gid 70**, the `postgres` user in
+    the Alpine image. Ansible creates it with that owner on purpose. The first version created it
+    as root: Postgres took it over on first start, and the next Ansible run handed it back to
+    root, which broke the database ("could not open file global/pg_filenode.map: Permission
+    denied"). That happened on the real server and was fixed with `chown 70:70`.
 - **Valkey** reads `valkey.conf` (password with `requirepass`, RDB snapshot every 60 s if
   anything changed, no AOF).
   - Runs as uid `999` with all capabilities dropped. Its data folder must be owned by uid 999.
@@ -1345,7 +1350,9 @@ Nothing here has run on the real server yet. These local tests were run on a wor
 17. **Wings paths must be identical inside and outside the container.** ([9](#quirk-wings-paths-must-be-the-same-inside-and-outside-the-container))
 18. **Quotas need `SYS_ADMIN` + the block device** in the panel container. ([9](#quirk-disk-quotas-need-sys_admin-and-the-block-device))
 19. **Postgres reads its password only at first init.** ([9](#postgres-and-valkey-details))
-20. **Valkey's data folder must be owned by uid 999**, or every panel request fails. ([9](#postgres-and-valkey-details))
+20. **Data folders are owned by the container's user:** Postgres 70, Valkey 999, Loki 10001,
+    Grafana 472. Ansible sets those owners. Never "fix" them to root, or the service loses its own
+    data. ([9](#postgres-and-valkey-details))
 21. **Single-file mounts go stale after edits.** Config-hash labels force recreation. ([9](#config-hash-labels-how-config-changes-reach-containers))
 22. **Panel UI changes to the four enforced settings are reverted** on the next run. ([9](#the-exposure-gate))
 23. **The panel caches settings for 60 s.** The bootstrap waits 65 s before going public. ([9](#the-exposure-gate))
