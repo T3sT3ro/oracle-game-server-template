@@ -722,8 +722,10 @@ Details that matter:
 ### Smoke test (`tasks/smoke.yml`)
 
 - The panel answers `curl http://127.0.0.1:8000/` inside its container.
-- `xfs_quota -x -c "state -p" /mnt/data` inside the container shows accounting **and**
-  enforcement ON. **This fails loudly if quotas don't work.** The fallback is
+- `xfs_quota -x -c "state -p" /mnt/data/wings/lib` inside the container shows accounting
+  **and** enforcement ON. It checks `wings/lib`, not `/mnt/data`, because inside the container
+  only the Wings folders are mount points. Asking about `/mnt/data` fails with "cannot setup
+  path for mount". **This fails loudly if quotas don't work.** The fallback is
   `calagopus_wings_disk_limiter_mode: none`.
 - Port 2022 accepts connections.
 

@@ -12,7 +12,9 @@
     project_src: "{{ calagopus_stack_dir }}"
     service: panel
     tty: false
-    argv: [xfs_quota, -x, -c, "state -p", "{{ calagopus_data_dir }}"]
+    # Inside the container only the Wings folders are mounts (/mnt/data itself isn't), so check
+    # the folder Wings actually puts server files in.
+    argv: [xfs_quota, -x, -c, "state -p", "{{ calagopus_data_dir }}/wings/lib"]
   register: calagopus_smoke_quota
   changed_when: false
   failed_when: >-
