@@ -9,3 +9,9 @@ web_subnet: 10.210.1.0/24
 # addresses below it (like Caddy's) are never taken by another container.
 web_ip_range: 10.210.1.128/25
 caddy_ip: 10.210.1.2
+
+# Private admin dashboards, published on your tailnet as Tailscale Services:
+# https://<name>.<tailnet>.ts.net (no port). Each name must first be defined in the Tailscale
+# console (Services → Advertise → Define a Service, endpoint tcp:443); see the README.
+grafana_service_name: logs     # Grafana: logs and the security dashboard
+beszel_service_name: status    # Beszel: CPU, memory, disk, alerts

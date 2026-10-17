@@ -1,13 +1,13 @@
-# Grafana and Beszel need their public (tailnet) address for links and cookies.
+# Grafana and Beszel need their own address (a Tailscale Service name) for links and cookies.
 - name: Read the tailnet name
   ansible.builtin.command: tailscale status --json
   register: observability_tailscale_status
   changed_when: false
   check_mode: false # read-only; must also run during --check
 
-- name: Remember the tailnet name
+- name: Remember the tailnet's domain (e.g. flounder-bleak.ts.net)
   ansible.builtin.set_fact:
-    observability_tailnet_name: "{{ (observability_tailscale_status.stdout | from_json).Self.DNSName | regex_replace('\\.$', '') }}"
+    observability_tailnet_domain: "{{ (observability_tailscale_status.stdout | from_json).MagicDNSSuffix | regex_replace('\\.$', '') }}"
 
 - name: Create observability directories
   ansible.builtin.file:
@@ -103,5 +103,5 @@
 - name: Admin UI addresses
   ansible.builtin.debug:
     msg:
-      - "Grafana: https://{{ observability_tailnet_name }}:8443  (admin / vault_grafana_admin_password)"
-      - "Beszel:  https://{{ observability_tailnet_name }}:8444  ({{ observability_beszel_admin_email }} / vault_beszel_admin_password)"
+      - "Grafana: https://{{ grafana_service_name }}.{{ observability_tailnet_domain }}  (admin / vault_grafana_admin_password)"
+      - "Beszel:  https://{{ beszel_service_name }}.{{ observability_tailnet_domain }}  ({{ observability_beszel_admin_email }} / vault_beszel_admin_password)"

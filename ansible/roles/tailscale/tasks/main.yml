@@ -75,10 +75,6 @@
   ansible.builtin.set_fact:
     tailscale_status: "{{ tailscale_status_after.stdout | from_json }}"
 
-- name: Expose MagicDNS name to later roles
-  ansible.builtin.set_fact:
-    tailscale_dns_name: "{{ tailscale_status.Self.DNSName | regex_replace('\\.$', '') }}"
-
 # `tailscale serve` starts an interactive consent flow (and the play would hang) when the
 # tailnet has HTTPS certificates disabled, so check first.
 - name: Require MagicDNS + HTTPS certificates in the tailnet
@@ -88,11 +84,34 @@
       Enable MagicDNS and HTTPS Certificates in the Tailscale admin console
       (DNS page), then re-run with --tags tailscale.
 
-# Idempotent: re-running with the same port and target changes nothing.
-- name: Publish admin UIs on the tailnet over HTTPS
-  ansible.builtin.command: >-
-    timeout 30 tailscale serve --bg --yes --https={{ item.port }} {{ item.target }}
-  loop: "{{ tailscale_serve }}"
-  loop_control:
-    label: "https://{{ tailscale_dns_name }}:{{ item.port }} -> {{ item.target }}"
+- name: Read current serve config
+  ansible.builtin.command: tailscale serve status --json
+  register: tailscale_serve_status
   changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Remove old per-port dashboard entries (:8443, :8444)
+  ansible.builtin.command: timeout 30 tailscale serve --https={{ item }} off
+  loop: "{{ tailscale_legacy_serve_ports }}"
+  when: (item | string) in ((tailscale_serve_status.stdout | default('{}', true) | from_json).TCP | default({}))
+  changed_when: true
+
+# Idempotent: re-running with the same name and target changes nothing. A service the
+# Tailscale console doesn't know yet makes this fail, so explain what to do.
+- name: Publish dashboards as Tailscale Services
+  block:
+    - name: Serve each dashboard at https://<name>.<tailnet>.ts.net
+      ansible.builtin.command: >-
+        timeout 30 tailscale serve --service=svc:{{ item.name }} --https=443 {{ item.target }}
+      loop: "{{ tailscale_services }}"
+      loop_control:
+        label: "https://{{ item.name }}.{{ tailscale_status.MagicDNSSuffix }} -> {{ item.target }}"
+      changed_when: false
+  rescue:
+    - name: Explain what's missing in the Tailscale console
+      ansible.builtin.fail:
+        msg: >-
+          Publishing a Tailscale Service failed. In the Tailscale console, define each service
+          (Services → Advertise → Define a Service:
+          {{ tailscale_services | map(attribute='name') | join(', ') }}; endpoint tcp:443) and
+          add them to autoApprovers for {{ tailscale_tags | join(', ') }}. See the README.

@@ -257,14 +257,28 @@ policy:
    - An SSH key in `~/.ssh/id_ed25519` (or set `SSH_KEY`).
 3. **Tailscale** (admin console):
    - Turn on **MagicDNS** and **HTTPS Certificates** on the DNS page.
-   - Add the server's tag and allow only yourself to reach it:
+   - **Services → Advertise → Define a Service**, twice. The dashboards are published under
+     these names (set in `group_vars/all/network.yml`):
+
+     | Name | Endpoint | Becomes |
+     | :--- | :--- | :--- |
+     | `logs` | `tcp:443` | `https://logs.<tailnet>.ts.net` (Grafana) |
+     | `status` | `tcp:443` | `https://status.<tailnet>.ts.net` (Beszel) |
+
+   - **Access controls:** own the server's tag, let it publish the two services without manual
+     approval, and allow only yourself in:
      ```jsonc
      "tagOwners": { "tag:gameserver": ["autogroup:admin"] },
+     "autoApprovers": {
+       "services": { "svc:logs": ["tag:gameserver"], "svc:status": ["tag:gameserver"] }
+     },
      "grants": [
-       { "src": ["autogroup:admin"], "dst": ["tag:gameserver"], "ip": ["tcp:22", "tcp:8443-8444"] }
+       { "src": ["autogroup:admin"], "dst": ["svc:logs", "svc:status"], "ip": ["443"] },
+       { "src": ["autogroup:admin"], "dst": ["tag:gameserver"], "ip": ["tcp:22"] }
      ]
      ```
-   - Remove the default "allow everything" rule if it's still there.
+   - Remove the default "allow everything" rule if it's still there (only if your other
+     devices don't depend on it).
    - Create an auth key: not reusable, pre-approved, tag `tag:gameserver`.
 4. **DNS.** Point an `A` record for `panel.<your domain>` at the server's public IP
    (`terraform -chdir=oci output public_ip`). Do the same for each website (see
@@ -317,8 +331,11 @@ Open these from a device on your tailnet:
 
 | Address | What |
 | :--- | :--- |
-| `https://<server>.<tailnet>.ts.net:8443` | Grafana: logs (live and past) and the Security overview |
-| `https://<server>.<tailnet>.ts.net:8444` | Beszel: health and alerts |
+| `https://logs.<tailnet>.ts.net` | Grafana: logs (live and past) and the Security overview |
+| `https://status.<tailnet>.ts.net` | Beszel: health and alerts |
+
+These are Tailscale Services: private names on your tailnet, no port to remember. The names
+are `grafana_service_name` / `beszel_service_name` in `ansible/group_vars/all/network.yml`.
 
 ## Everyday tasks
 
@@ -371,6 +388,8 @@ Preview changes without applying them:
 | A site shows a certificate error | Its DNS doesn't point at the server yet, or ports 80/443 are blocked. Check Caddy's log in Grafana (`{container="web-caddy-1"}`). Let's Encrypt allows only a few failed tries per hour, so set `acme_staging: true` while testing. |
 | A site says "502 Bad Gateway" | The app behind it isn't running or listens on another port. Check `docker ps` and the app's log in Grafana. |
 | The playbook stops at "Require MagicDNS + HTTPS certificates" | Turn on HTTPS Certificates on the Tailscale DNS page. |
+| The playbook stops at "Publishing a Tailscale Service failed" | Define the `logs` and `status` services in the Tailscale console and add them to `autoApprovers` (see Before you start). |
+| `https://logs.…` doesn't load | The service is waiting for approval (Tailscale console → Services), or your policy has no grant for it. |
 | You can't SSH in | Tailscale is down on the server or on your device. Use OCI Bastion (see Everyday tasks). |
 | Beszel shows the server as "pending" | Normal for the first minute after a restart. |
 | The disk is filling up | Check Beszel. Usual causes: game backups (lower the retention) or a very chatty log. |

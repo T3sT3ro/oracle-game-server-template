@@ -1,5 +1,6 @@
 # {{ ansible_managed }}
-# Admin UIs bind to 127.0.0.1 only; the tailscale role publishes them on the tailnet.
+# Admin UIs bind to 127.0.0.1 only; the tailscale role publishes them on the tailnet as
+# Tailscale Services (https://logs.<tailnet>.ts.net, https://status.<tailnet>.ts.net).
 # Services carry a hash of their config files as a label, so `docker compose up` recreates
 # exactly the ones whose config changed.
 name: observability
@@ -69,7 +70,7 @@ services:
     labels:
       config-hash: "{{ (lookup('template', 'grafana-datasources.yml.j2') ~ lookup('template', 'grafana-dashboards.yml.j2')) | hash('sha256') | truncate(16, True, '') }}"
     environment:
-      GF_SERVER_ROOT_URL: "https://{{ observability_tailnet_name }}:8443/"
+      GF_SERVER_ROOT_URL: "https://{{ grafana_service_name }}.{{ observability_tailnet_domain }}/"
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
       GF_SECURITY_COOKIE_SECURE: "true"
@@ -97,7 +98,7 @@ services:
     labels:
       config-hash: "{{ lookup('template', 'beszel-config.yml.j2') | hash('sha256') | truncate(16, True, '') }}"
     environment:
-      APP_URL: "https://{{ observability_tailnet_name }}:8444"
+      APP_URL: "https://{{ beszel_service_name }}.{{ observability_tailnet_domain }}"
       # First boot only: creates the admin. Change the password in the UI afterwards if you like.
       USER_EMAIL: "{{ observability_beszel_admin_email }}"
       USER_PASSWORD: "{{ vault_beszel_admin_password }}"

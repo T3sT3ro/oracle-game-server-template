@@ -1,5 +1,9 @@
-# Admin UIs listen on 127.0.0.1 only and are reachable solely through these tailnet ports.
-# Not 443: keep the tailnet listeners clearly separate from Caddy's public 443.
-tailscale_serve:
-  - { port: 8443, target: "http://127.0.0.1:3000" }   # Grafana (logs, security dashboards)
-  - { port: 8444, target: "http://127.0.0.1:8090" }   # Beszel (health, alerts)
+# Dashboards published as Tailscale Services: https://<name>.<tailnet>.ts.net on port 443.
+# The names come from group_vars/all/network.yml; the targets are the loopback ports the
+# observability role publishes (Grafana 3000, Beszel 8090).
+tailscale_services:
+  - { name: "{{ grafana_service_name }}", target: "http://127.0.0.1:3000" }
+  - { name: "{{ beszel_service_name }}", target: "http://127.0.0.1:8090" }
+
+# Per-port serve entries from before Tailscale Services; removed if still present.
+tailscale_legacy_serve_ports: [8443, 8444]

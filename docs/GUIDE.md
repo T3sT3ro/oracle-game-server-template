@@ -106,8 +106,8 @@ flowchart LR
   panel --> cache
   panel -- "Docker socket" --> games
   you -- "WireGuard" --> ts
-  ts -- ":8443" --> grafana
-  ts -- ":8444" --> beszel
+  ts -- "logs" --> grafana
+  ts -- "status" --> beszel
   alloy --> loki
   grafana --> loki
   alloy --> proxy
@@ -499,18 +499,30 @@ Docker then adds its chains in front.
   certificates enabled, `tailscale serve` starts an *interactive* consent flow and the play
   would hang forever. So the role first checks `CertDomains` in `tailscale status --json` and
   fails with instructions if it's empty.
-- **Publishes the dashboards** with `tailscale serve --bg --https=<port> http://127.0.0.1:<port>`:
+- **Publishes the dashboards as Tailscale Services**, one private name per dashboard and no port:
 
-  | Tailnet address | Goes to |
-  | :--- | :--- |
-  | `https://<tailscale_hostname>.<tailnet>.ts.net:8443` | Grafana (`127.0.0.1:3000`) |
-  | `https://<tailscale_hostname>.<tailnet>.ts.net:8444` | Beszel (`127.0.0.1:8090`) |
+  | Tailnet address | Service | Goes to |
+  | :--- | :--- | :--- |
+  | `https://logs.<tailnet>.ts.net` | `svc:logs` | Grafana (`127.0.0.1:3000`) |
+  | `https://status.<tailnet>.ts.net` | `svc:status` | Beszel (`127.0.0.1:8090`) |
 
-  - Serve config survives reboots.
-  - The command is idempotent and runs every time. `timeout 30` guards against hangs.
-  - Port 443 isn't used for serve, to keep it visibly separate from Caddy's public 443.
-  - **Removing a port** from `tailscale_serve` does *not* unpublish it. Run
-    `tailscale serve --https=<port> off` on the server.
+  - The command is `tailscale serve --service=svc:<name> --https=443 <target>`. The names are
+    `grafana_service_name` / `beszel_service_name` in `group_vars/all/network.yml`.
+  - **Requirements:**
+    - Services need a **tagged** host and Tailscale ≥ 1.86. The server has both.
+    - Each name must be **defined in the console** first (Services → Advertise → Define a
+      Service, endpoint `tcp:443`).
+    - The host must be **approved** as that service's proxy: either automatically via
+      `autoApprovers.services` in your policy, or by hand on the Services page.
+    - Users need a **grant** to `svc:<name>` on port 443.
+  - **If a service isn't defined yet**, the publish task fails with a message that says so,
+    instead of a raw error.
+  - **Old per-port entries are cleaned up.** The `:8443`/`:8444` entries from before Services
+    are removed automatically when present (`tailscale_legacy_serve_ports`).
+  - Serve config survives reboots. The command is idempotent and runs every time. `timeout 30`
+    guards against hangs.
+  - **Removing a service:** taking it out of `tailscale_services` does *not* unpublish it. On
+    the server, run `tailscale serve drain svc:<name>`, then `tailscale serve clear svc:<name>`.
 - **Certificates are public.** Tailscale's certificates are logged publicly, so your tailnet
   name and server name are visible in certificate-transparency logs. The services themselves
   stay private.
@@ -879,8 +891,8 @@ flowchart LR
   wingslog[("Wings logs")] --> alloy
   journal[("systemd journal")] --> alloy
   alloy --> loki[("Loki<br/>30 days")]
-  loki --> grafana["Grafana<br/>:8443 via tailnet"]
-  agent -- "unix socket" --> hub["Beszel hub<br/>:8444 via tailnet"]
+  loki --> grafana["Grafana<br/>(logs service)"]
+  agent -- "unix socket" --> hub["Beszel hub<br/>(status service)"]
 ```
 
 ### Socket proxy
@@ -934,8 +946,8 @@ Single-binary Loki with filesystem storage in `/mnt/data/observability/loki`. It
   (`GF_SECURITY_ADMIN_PASSWORD__FILE`).
   - **Quirk:** Grafana applies that password **only on first start**, when its database is
     created. Changing the vault value later does nothing; change it in the UI.
-- **Root URL:** `https://<tailnet name>:8443/`. The observability role looks up the tailnet name
-  itself, so `--tags observability` alone still gets it right.
+- **Root URL:** `https://logs.<tailnet>.ts.net/`. The observability role reads the tailnet's
+  domain (`MagicDNSSuffix`) itself, so `--tags observability` alone still gets it right.
 - **Settings:** secure cookies, no sign-up, no anonymous access, all analytics, update checks
   and news turned off.
 - **Provisioning** (read-only mounts):
@@ -960,8 +972,8 @@ Single-binary Loki with filesystem storage in `/mnt/data/observability/loki`. It
 ### Beszel (health and alerts)
 
 - **Hub:**
-  - Data in `/mnt/data/observability/beszel`, served on `127.0.0.1:8090`, published as tailnet
-    port 8444.
+  - Data in `/mnt/data/observability/beszel`, served on `127.0.0.1:8090`, published as
+    `https://status.<tailnet>.ts.net`.
   - Login is the panel admin email with `vault_beszel_admin_password`. It's created by
     `USER_EMAIL`/`USER_PASSWORD` **on first boot only**.
   - **Quirk:** that password sits in the container's environment, so it's visible to
@@ -1010,7 +1022,7 @@ Single-binary Loki with filesystem storage in `/mnt/data/observability/loki`. It
 | Public | 25500–25600 tcp+udp | Game servers (allocations on `0.0.0.0`) | Internet |
 | Public | 41641/udp | tailscaled | Internet (WireGuard ignores unknown peers) |
 | VCN | 22/tcp | sshd | Bastion inside the VCN. Bootstrap: your IP. |
-| Tailnet | 22, 8443, 8444 | sshd, Grafana, Beszel | Your tailnet devices (restrict further with tailnet grants) |
+| Tailnet | 22 (host), 443 on `svc:logs` / `svc:status` | sshd, Grafana, Beszel | Your tailnet devices, as allowed by your tailnet grants |
 | Host loopback | 3000, 8090, 2375 | Grafana, Beszel hub, socket proxy | Processes on the host |
 | `web` network | 8000 | Panel HTTP | Caddy (and apps; harmless, since only Caddy is trusted for client IPs) |
 | `172.18.0.1` | allocations you create there | Game web ports | Caddy / host only |
@@ -1344,8 +1356,9 @@ Nothing here has run on the real server yet. These local tests were run on a wor
     ([12](#why-the-host-firewall-doesnt-protect-docker-ports))
 13. **Tailscale serve needs HTTPS certificates enabled**, or it waits for interactive consent.
     The play checks first. ([8](#role-tailscale))
-14. **Removing a serve port from the list doesn't unpublish it.** Run `tailscale serve … off`.
-    ([8](#role-tailscale))
+14. **Dashboards are Tailscale Services.** Each name must be defined in the console and
+    auto-approved (or approved by hand). Removing one from the list doesn't unpublish it: run
+    `tailscale serve drain` then `clear`. ([8](#role-tailscale))
 15. **Panel secrets live in `/.env`, not the environment.** ([9](#quirk-the-panels-config-comes-from-env-not-the-environment))
 16. **The AIO rewrites its Wings config**, hence the entrypoint `cp`. Check it after image
     upgrades. ([9](#quirk-the-wings-config-is-copied-in-at-every-start))
