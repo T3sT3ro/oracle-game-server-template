@@ -147,7 +147,7 @@ through the Docker socket, on its own Docker network.
 | `oci/*.tf` | Terraform. `api_key.pem`, `terraform.tfvars` and `terraform.tfstate` live here and are gitignored. |
 | `ansible/ansible.cfg` | Inventory path, vault password file, SSH options. |
 | `ansible/site.yml` | The playbook: a vault sanity check, then 8 roles in a fixed order. |
-| `ansible/requirements.yml` | Collections: community.docker, community.general, community.crypto, ansible.posix. |
+| `ansible/requirements.yml` | Collections: community.docker, community.general, ansible.posix. |
 | `ansible/group_vars/all/vars.yml` | **Your** settings (domain, emails, sites, apps). Gitignored. A copy of `vars.yml.example`. |
 | `ansible/group_vars/all/vault.yml` | **Your** secrets, encrypted with ansible-vault. Gitignored. |
 | `ansible/group_vars/all/images.yml` | Every container image, pinned by tag + digest. Tracked. |
@@ -972,8 +972,10 @@ Single-binary Loki with filesystem storage in `/mnt/data/observability/loki`. It
   - **The data disk is mounted at `/extra-filesystems/data`**, which is Beszel's convention
     for monitoring an extra filesystem. Without it you'd see only the system disk.
 - **Pairing without clicks:**
-  1. Ansible creates the hub's SSH key `id_ed25519` in the hub's data folder.
-  2. The public half becomes the agent's `KEY`.
+  1. Ansible creates the hub's SSH key `id_ed25519` in the hub's data folder with plain
+     `ssh-keygen`, once. community.crypto's `openssh_keypair` failed on the real server, trying
+     to `chattr` the file on XFS.
+  2. The public half (read with `ssh-keygen -y` on every run) becomes the agent's `KEY`.
   3. The agent listens on a **unix socket** in a folder both containers share.
   4. `config.yml` in the hub's data folder declares the system with
      `host: /beszel_socket/beszel.sock`.

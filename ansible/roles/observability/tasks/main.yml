@@ -31,13 +31,19 @@
     - { path: "{{ observability_data_dir }}/beszel-socket", mode: "0700" }
 
 # Pre-seeded hub key: the agent's KEY is known up front, so no UI pairing step.
-- name: Generate Beszel hub SSH key
-  community.crypto.openssh_keypair:
-    path: "{{ observability_data_dir }}/beszel/id_ed25519"
-    type: ed25519
-    comment: beszel-hub
-    mode: "0600"
-  register: observability_beszel_hub_key
+# Plain ssh-keygen: community.crypto's openssh_keypair fails here trying to set file
+# attributes (chattr) on the XFS data disk.
+- name: Generate Beszel hub SSH key (once)
+  ansible.builtin.command: >-
+    ssh-keygen -q -t ed25519 -N "" -C beszel-hub -f {{ observability_data_dir }}/beszel/id_ed25519
+  args:
+    creates: "{{ observability_data_dir }}/beszel/id_ed25519"
+
+- name: Read the hub's public key (becomes the agent's KEY)
+  ansible.builtin.command: ssh-keygen -y -f {{ observability_data_dir }}/beszel/id_ed25519
+  register: observability_beszel_pubkey
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
 
 - name: Write Grafana admin password secret
   ansible.builtin.copy:

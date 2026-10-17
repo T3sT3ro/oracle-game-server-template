@@ -114,7 +114,7 @@ services:
     restart: unless-stopped
     network_mode: host # host NIC stats
     environment:
-      KEY: "{{ observability_beszel_hub_key.public_key }}"
+      KEY: "{{ observability_beszel_pubkey.stdout | trim }}"
       # The hub connects to this unix socket (see beszel-config.yml): no TCP listener, no token.
       LISTEN: /beszel_socket/beszel.sock
       DOCKER_HOST: tcp://127.0.0.1:2375
