@@ -247,10 +247,11 @@ What each mode does exactly:
 
 Quirks:
 
-- **The API key passphrase is asked for repeatedly.** `private_key_pass` is an *ephemeral*
-  Terraform variable: never stored in state or plan files. Terraform asks for it at `plan` and
-  again at `apply`, so `bootstrap` (two plan/apply pairs) asks four times. To answer once per
-  shell:
+- **The API key passphrase is asked for once per run.** `private_key_pass` is an *ephemeral*
+  Terraform variable: never stored in state or plan files. Applying a saved plan
+  (`apply tfplan`) therefore needs it again, and Terraform errors instead of prompting.
+  `deploy.sh` asks once (`ask_key_passphrase`) and exports `TF_VAR_private_key_pass` for every
+  call in that run. To skip the prompt entirely, export it yourself first:
   ```bash
   read -rs TF_VAR_private_key_pass && export TF_VAR_private_key_pass
   ```
@@ -1312,8 +1313,9 @@ Nothing here has run on the real server yet. These local tests were run on a wor
 
 ## 17. Quirks and gotchas, all in one place
 
-1. **Ephemeral passphrase.** Terraform asks for the API key passphrase at every plan and apply.
-   Export `TF_VAR_private_key_pass` once per shell. ([6](#6-the-deploy-flow-deploysh))
+1. **Ephemeral passphrase.** Applying a saved plan won't prompt for it. `deploy.sh` asks once
+   and exports `TF_VAR_private_key_pass`; raw `terraform apply tfplan` needs it exported.
+   ([6](#6-the-deploy-flow-deploysh))
 2. **Host keys are trusted on first use**, separately for the IP and the tailnet name. After
    rebuilding the server, run `ssh-keygen -R`. ([6](#6-the-deploy-flow-deploysh))
 3. **Terraform ignores image and SSH-key changes** on the instance, on purpose. New images never

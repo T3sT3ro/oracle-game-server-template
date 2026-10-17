@@ -40,7 +40,18 @@ run_playbook() {
   (cd ansible && ansible-playbook site.yml "$@")
 }
 
+# The API key passphrase is an ephemeral Terraform variable: never stored in a plan file, so
+# `apply tfplan` needs it again and won't prompt for it. Ask once and pass it to every call.
+ask_key_passphrase() {
+  if [[ -z "${TF_VAR_private_key_pass:-}" ]]; then
+    read -rsp "OCI API key passphrase: " TF_VAR_private_key_pass
+    echo
+    export TF_VAR_private_key_pass
+  fi
+}
+
 tf_apply_interactive() {
+  ask_key_passphrase
   tf init -input=false >/dev/null
   tf plan -out=tfplan "$@"
   read -rp "Apply this plan? [y/N] " answer
