@@ -71,7 +71,7 @@
     dest: /etc/systemd/system/docker.service.d/10-require-data.conf
     mode: "0644"
     content: |
-      # {{ ansible_managed }}
+      # Managed by Ansible (storage role)
       [Unit]
       RequiresMountsFor={{ data_mount_point }}
   register: storage_docker_dropin
