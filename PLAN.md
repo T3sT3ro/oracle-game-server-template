@@ -8,12 +8,18 @@ Priorities: **security** and **analytics/observability** first, then convenience
 
 ## 1. Where things stand
 
-### Live environment (unchanged so far)
+### Live environment (deployed 2026-10-18)
 
-- `oci/` is applied with the **old** definitions; the instance has been up since 2026-09-23.
-- The host has never been configured: no Docker, unformatted data volume, OCI stock iptables.
-- DNS: `panel.*` has no public record yet; the local `/etc/hosts` still maps `web.*`, `panel.*`
-  and `logs.*` to 127.0.0.1 (leftover from local testing — remove before deploying).
+- `deploy.sh infra` and `bootstrap`/`configure` have run. A full `configure` run is clean and
+  idempotent (`ok=81 changed=0 failed=0`).
+- Running: panel + Wings (AIO), Postgres, Valkey, Caddy, Grafana, Loki, Alloy, Beszel hub and
+  agent, socket proxy. Admin created, registration off, setup wizard closed, telemetry off.
+- Admin access over Tailscale: `ssh ubuntu@calagopus`, Grafana `:8443`, Beszel `:8444`.
+- **Still open:**
+  - Close public SSH: `./deploy.sh infra` removes the `SSH bootstrap` rule.
+  - DNS `A` record `panel` → server, for the HTTPS certificate.
+  - Remove the stale `/etc/hosts` line on the laptop.
+  - First panel login + 2FA, allocations, Beszel alerts.
 
 ### Code status (2026-10-16, first implementation pass)
 
@@ -73,6 +79,13 @@ These ran on throwaway containers on a workstation, with all data in a scratch f
     run of bootstrap gives 0 failures and 0 changes.
   - Removed the leftover `remote-exec` provisioner. It would have failed creation of a fresh
     instance, because SSH isn't open then.
+- **Bugs found during the real deploy (all fixed and committed):**
+  - `ansible_managed` is undefined in `copy: content:` on ansible-core 2.21 (storage role).
+  - `deploy.sh` didn't pass the ephemeral key passphrase to `apply tfplan`.
+  - The quota smoke test checked `/mnt/data`, which isn't a mount point inside the container.
+  - Ansible reset `/mnt/data/postgres` to root on the second run and locked Postgres out. Now
+    created as uid 70.
+  - community.crypto's `openssh_keypair` failed with `chattr` on XFS. Replaced with `ssh-keygen`.
 - **Not tested locally:** the AIO image itself (it needs the real Docker socket), Wings, XFS
   quotas, Tailscale and the firewall. These are in the "verify on the real host" list.
 
@@ -91,13 +104,12 @@ These ran on throwaway containers on a workstation, with all data in a scratch f
 
 ### Must be verified on the real host (first `bootstrap` run)
 
-- [ ] `xfs_quota` works from inside the AIO container (smoke test fails loudly if not; fallback
-      `calagopus_wings_disk_limiter_mode: none`).
-- [ ] `tailscale serve` on :8443–8444 coexists with Caddy on :443.
+- [x] `xfs_quota` works from inside the AIO container (verified: accounting + enforcement ON on `wings/lib`).
+- [x] `tailscale serve` on :8443–8444 coexists with Caddy on :443.
 - [ ] Boot order after a reboot: `nofail` mount + `RequiresMountsFor`, DOCKER-USER rules restored
       from `rules.v4`, Tailscale back up, serve config persisted.
 - [ ] A game server on a `0.0.0.0` allocation in `game_port_range` is reachable; SFTP on 2022.
-- [ ] Alloy reads the host journal (persistent journal on Ubuntu 24.04).
+- [x] Alloy reads the host journal (Loki has `docker`, `caddy`, `journal`, `wings`).
 - [ ] Caddy reaches a game server's web port on `172.18.0.1:<port>` on the server's Docker
       version (tested locally on Docker 28 with a stand-in network).
 - [ ] Moving the apex domain from GitHub Pages to the server: change its `A` records, then publish the blog.
