@@ -28,9 +28,10 @@ Priorities: **security** and **analytics/observability** first, then convenience
 - 2026-10-19: `infra` applied (alarm address, panel mail, Factorio's 34197/udp); Oracle's
   subscription confirmed at `admin@<domain>`. Panel mail works: DKIM CNAME, SPF include and
   DMARC (`p=none`) at Porkbun, SMTP login in the panel, test email received.
+- 2026-10-19: login captcha on (Cloudflare Turnstile for `panel.<domain>`). From outside: the
+  public settings announce it, a login without a token gets `400 captcha: required`, and a real
+  browser login with the captcha and 2FA works.
 - **Still open:**
-  - Login captcha: Turnstile widget, site key in `vars.yml`, secret via `init-vault.sh`,
-    `--tags calagopus`.
   - Factorio: allocation `0.0.0.0:34197`, a server from the "Factorio ARM64" egg.
   - Delete the leftover `0.0.0.0:25565` allocation from the node (nothing uses it).
   - Beszel alerts (D8), world backup policy in the panel.
@@ -269,7 +270,7 @@ shown there:
 - [x] Read-only socket proxy for monitoring tools.
 - [x] Panel baseline enforced every run: registration off, 2FA for admins, telemetry off, HTTPS URL.
 - [x] Login captcha, managed by Ansible: `calagopus_captcha_provider: turnstile` + site key,
-      secret in the vault; `none` as the way back in. [ ] Create the Turnstile widget and turn it on.
+      secret in the vault; `none` as the way back in. Turned on 2026-10-19.
 - [x] Panel mail via OCI Email Delivery (`oci/email.tf`, off until `mail_from_address` is set);
       SMTP login pasted in the panel UI because the panel encrypts it. Applied, DNS added,
       test email received (2026-10-19).
