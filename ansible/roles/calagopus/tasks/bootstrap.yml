@@ -11,6 +11,28 @@
     wait: true
     wait_timeout: 300
 
+# A captcha with an empty key would lock everyone out of the login page.
+- name: Check the captcha settings
+  ansible.builtin.assert:
+    that:
+      - calagopus_captcha_provider in ['', 'none', 'turnstile']
+      - calagopus_captcha_provider != 'turnstile' or calagopus_turnstile_site_key | length > 0
+      - calagopus_captcha_provider != 'turnstile' or vault_turnstile_secret_key | default('') | length > 0
+    fail_msg: >-
+      calagopus_captcha_provider must be "", "none" or "turnstile". For "turnstile", set
+      calagopus_turnstile_site_key in vars.yml and vault_turnstile_secret_key in the vault.
+    quiet: true
+
+- name: Add the captcha to the enforced settings
+  ansible.builtin.set_fact:
+    calagopus_settings_all: >-
+      {{ calagopus_settings | combine(
+           {} if calagopus_captcha_provider == ''
+           else {'::captcha_provider': 'none'} if calagopus_captcha_provider == 'none'
+           else {'::captcha_provider': 'turnstile',
+                 '::turnstile_site_key': calagopus_turnstile_site_key,
+                 '::turnstile_secret_key': vault_turnstile_secret_key}) }}
+
 # Only rows whose value differs are written; psql then prints "INSERT 0 <rows written>".
 - name: Enforce security-relevant panel settings
   community.docker.docker_compose_v2_exec:
@@ -28,11 +50,12 @@
       - -c
       - >-
         INSERT INTO settings (key, value) VALUES
-        {% for k, v in calagopus_settings.items() %}('{{ k | replace("'", "''") }}', '{{ v | replace("'", "''") }}'){{ ',' if not loop.last }}{% endfor %}
+        {% for k, v in calagopus_settings_all.items() %}('{{ k | replace("'", "''") }}', '{{ v | replace("'", "''") }}'){{ ',' if not loop.last }}{% endfor %}
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         WHERE settings.value IS DISTINCT FROM EXCLUDED.value
   register: calagopus_settings_write
   changed_when: "'INSERT 0 0' not in calagopus_settings_write.stdout"
+  no_log: "{{ calagopus_captcha_provider == 'turnstile' }}" # the SQL holds the captcha secret
 
 - name: Count panel users
   community.docker.docker_compose_v2_exec:

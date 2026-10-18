@@ -97,6 +97,7 @@ Everything here fits inside them:
 | Disk | 50 GB system + 150 GB data = 200 GB | 200 GB, home region only |
 | Volume backups | Weekly, kept 3 weeks (at most 4) | 5 in total, system disk and data disk together |
 | Alert emails | At most ~360 a month, even if both alarms fire all month | 1,000 a month |
+| Panel email (Email Delivery) | Invites, password resets, tests: a handful a month | 3,000 a month |
 | Monitoring | Server metrics + 2 alarms | Far below the free amount |
 | Traffic out | Players + panel | 10 TB a month |
 | Bastion, budget, network, public IP | — | No charge |
@@ -113,6 +114,7 @@ Things that **would** cost money:
 - Disks created outside your home region.
 - Leftover system disks from deleted servers. They still count toward the 200 GB.
 - More than 10 GB in Object Storage (Standard tier).
+- More than 3,000 panel emails in a month (about $0.09 per extra 1,000).
 
 ## Security
 
@@ -230,6 +232,16 @@ Players join `islands.factorio.example.com`.
 is open there too). Set the allocation's alias to the server's name, for example
 `factory.factorio.example.com`, so the panel shows players the full address:
 `factory.factorio.example.com:25510`.
+
+**Which egg on this ARM server.** Factorio needs every player on exactly the server's version.
+Wube's native ARM server only exists on the experimental 2.1 branch (since September 2026), so:
+
+- **Factorio ARM64** egg (in the standard egg repositories): runs the normal stable server
+  through the box64 emulator. Players stay on stable. Slower, but fine for a small factory.
+  Start with this one.
+- **Native ARM**: the regular Factorio egg always downloads the x86 build. Native needs an egg
+  changed to download `headless/linux-arm64` with version `experimental`, and every player on
+  the experimental branch in Steam. Worth it once 2.1 becomes stable.
 
 Other games work the same way: one server on the game's default port (add it to
 `game_default_ports`), the rest on name plus port. Two games with the same default port (for
@@ -365,7 +377,8 @@ policy:
 2. **Oracle.**
    - An API key in `oci/api_key.pem`.
    - `oci/terraform.tfvars` with `user_ocid`, `fingerprint`, `tenancy_ocid`, `region`,
-     `compartment_ocid` and `notification_email`.
+     `compartment_ocid` and `notification_email` (use `admin@<your domain>`, the same address as
+     `admin_email` in `vars.yml`).
    - An SSH key in `~/.ssh/id_ed25519` (or set `SSH_KEY`).
 3. **Tailscale** (admin console):
    - Turn on **MagicDNS** and **HTTPS Certificates** on the DNS page.
@@ -402,7 +415,9 @@ policy:
 cp ansible/group_vars/all/vars.yml.example ansible/group_vars/all/vars.yml
 ```
 
-Edit `vars.yml`: your domain, email addresses and websites. Then:
+Edit `vars.yml`: your domain and websites. Everything that needs an email address uses
+`admin_email` (`admin@<your domain>` by default), so set up a forward for it at your registrar.
+Then:
 
 ```bash
 scripts/init-vault.sh
@@ -450,6 +465,55 @@ Open these from a device on your tailnet:
 
 These are Tailscale Services: private names on your tailnet, no port to remember. The names
 are `grafana_service_name` / `beszel_service_name` in `ansible/group_vars/all/network.yml`.
+
+## Email and login captcha
+
+Both are optional, and both are set up once.
+
+### Email from the panel
+
+The panel sends invites and password resets. It uses Oracle's Email Delivery, free up to
+3,000 emails a month, with `admin@<your domain>` as the sender.
+
+1. In `oci/terraform.tfvars`, set `mail_from_address = "admin@<your domain>"` and run
+   `./deploy.sh infra`. Terraform creates the email domain, a DKIM key, the approved sender
+   and an SMTP login.
+2. Add two DNS records at your registrar. Get them with:
+   ```bash
+   terraform -chdir=oci output mail_dns_records
+   ```
+   - A `CNAME` for DKIM (name and value from the output).
+   - Your SPF `TXT` record gets Oracle's include. A domain may have only one SPF record, so
+     add it to the existing one, for example
+     `v=spf1 include:_spf.porkbun.com include:eu.rp.oracleemaildelivery.com ~all`.
+3. In the panel: Admin → Settings → Mail. Choose SMTP and copy the values from
+   `terraform -chdir=oci output mail_smtp`, with the password from:
+   ```bash
+   terraform -chdir=oci output -raw mail_smtp_password
+   ```
+   Use port 465 with implicit TLS. Then send a test email.
+
+The panel stores the SMTP password encrypted with its own key, so Ansible can't set it for you.
+It stays in the panel's database, so you do this once.
+
+### Login captcha
+
+A captcha on the login page (also password reset, registration and new subusers) stops
+password-guessing bots. This setup uses Cloudflare Turnstile: free, usually invisible, and your
+DNS stays at your registrar.
+
+1. In a free Cloudflare account: Turnstile → Add widget. Hostname: `panel.<your domain>`.
+   Mode: Managed.
+2. In `vars.yml`:
+   ```yaml
+   calagopus_captcha_provider: "turnstile"
+   calagopus_turnstile_site_key: "0x4AAAA..."   # the site key, it's public
+   ```
+3. Run `scripts/init-vault.sh`. It asks for the widget's secret key.
+4. Run `./deploy.sh configure --tags calagopus`.
+
+**Locked out?** A wrong key makes every login fail. Set `calagopus_captcha_provider: "none"`
+and run `--tags calagopus` again. Leaving it `""` keeps whatever the panel UI has.
 
 ## Everyday tasks
 
@@ -514,6 +578,8 @@ Preview changes without applying them:
 | Players can't join `<name>.mc.…` | Check that `<name>.mc.<domain>` resolves to the server, the name is in `minecraft_servers` (then `--tags games`), and the playbook says "server is up". mc-router's log: `{container="games-mc-router-1"}` in Grafana. "no route to host" there means the server's port is outside 25700–25799, or the firewall rule is missing (`--tags firewall`). |
 | Players can't join `<name>.factorio.…` without a port | Only the server on the game's default port works without one. Check `game_default_ports` in `terraform.tfvars` (then `./deploy.sh infra`) and that the server's allocation is `0.0.0.0:34197`. Other servers need `name:port`. |
 | The playbook stops at "Explain why mc-router didn't start" | Usually a game server still uses port 25565. See [Move an existing Minecraft server](#move-an-existing-minecraft-server-to-a-name). |
+| Every login fails with a captcha error | The Turnstile keys or its hostname are wrong. Set `calagopus_captcha_provider: "none"`, run `--tags calagopus`, fix the keys, turn it back on. |
+| The panel's test email fails | Check the DKIM and SPF records (`terraform -chdir=oci output mail_dns_records`), port 465 with implicit TLS, and that the sender is exactly `mail_from_address`. |
 | You can't SSH in | Tailscale is down on the server or on your device. Use OCI Bastion (see Everyday tasks). |
 | Beszel shows the server as "pending" | Normal for the first minute after a restart. |
 | The disk is filling up | Check Beszel. Usual causes: game backups (lower the retention) or a very chatty log. |

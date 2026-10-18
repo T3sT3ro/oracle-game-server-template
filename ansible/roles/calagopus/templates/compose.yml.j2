@@ -36,9 +36,15 @@ services:
 {% if calagopus_wings_disk_limiter_mode == 'xfs_quota' %}
     # xfs_quota sets limits through quotactl(), which needs CAP_SYS_ADMIN and the block device.
     # (The container already holds the Docker socket, so this adds no real privilege.)
+    # The data disk's kernel name (sda, sdb) can swap between boots, and xfs_quota looks for the
+    # name /proc/mounts shows. So the disk goes in under every likely name. Docker resolves the
+    # stable path at each container start, so these always point at the data disk, never at
+    # the boot disk.
     cap_add: [SYS_ADMIN]
     devices:
-      - "{{ calagopus_data_device }}:{{ calagopus_data_device }}"
+{% for name in calagopus_data_device_names %}
+      - "{{ data_block_device }}:/dev/{{ name }}"
+{% endfor %}
 {% endif %}
     security_opt: ["no-new-privileges:true"]
     ports:

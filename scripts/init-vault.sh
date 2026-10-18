@@ -50,6 +50,15 @@ if ! grep -qE '^vault_tailscale_authkey:' "$plain" && [[ -t 0 ]]; then
   [[ -n "$ts_key" ]] && add vault_tailscale_authkey "$ts_key"
 fi
 
+# The Turnstile secret is only needed once vars.yml turns the login captcha on.
+VARS="$(dirname "$VAULT")/vars.yml"
+if grep -qE '^calagopus_captcha_provider: *"?turnstile' "$VARS" 2>/dev/null \
+  && ! grep -qE '^vault_turnstile_secret_key:' "$plain" && [[ -t 0 ]]; then
+  echo "Turnstile secret key: Cloudflare dashboard → Turnstile → your widget → Secret key."
+  read -rsp "Secret key: " ts_secret; echo
+  [[ -n "$ts_secret" ]] && add vault_turnstile_secret_key "$ts_secret"
+fi
+
 legacy="$(grep -oE '^(vault_mysql_[a-z_]+|vault_app_key|vault_admin_password):' "$plain" | tr -d ':' | paste -sd' ' || true)"
 [[ -n "$legacy" ]] && echo "Note: unused legacy keys still in the vault: $legacy (safe to delete with ansible-vault edit)."
 

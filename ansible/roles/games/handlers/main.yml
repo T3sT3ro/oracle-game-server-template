@@ -1,7 +1,16 @@
 # A running mc-router re-reads routes.json on SIGHUP. Nobody gets disconnected.
-- name: Reload Minecraft routes
-  ansible.builtin.command: docker compose kill --signal SIGHUP mc-router
-  args:
-    chdir: "{{ games_stack_dir }}"
+# The signal goes straight to the process, not through `docker kill --signal`: Docker marks a
+# container it signalled as "manually stopped", and then doesn't start it again after a reboot.
+- name: Find mc-router's process
+  ansible.builtin.command:
+    argv: [docker, inspect, --format, "{% raw %}{{.State.Pid}}{% endraw %}", games-mc-router-1]
+  register: games_router_pid
   when: not ansible_check_mode # in --check, mc-router may not exist yet
+  changed_when: false
+  listen: Reload Minecraft routes
+
+- name: Send SIGHUP to mc-router
+  ansible.builtin.command: kill -HUP {{ games_router_pid.stdout | int }}
+  when: not ansible_check_mode and games_router_pid.stdout | default('0') | int > 0
   changed_when: true
+  listen: Reload Minecraft routes

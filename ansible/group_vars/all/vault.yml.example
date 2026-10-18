@@ -13,3 +13,5 @@ vault_beszel_admin_password: "<random>"
 # One-off, pre-approved, tagged (tag:gameserver) auth key from the Tailscale admin console.
 # Only needed until the node has joined.
 vault_tailscale_authkey: "tskey-auth-..."
+# Only with calagopus_captcha_provider: "turnstile". Secret key of a Cloudflare Turnstile widget.
+vault_turnstile_secret_key: "0x..."

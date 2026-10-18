@@ -2,7 +2,11 @@
 
 domain_name: "example.com"
 panel_hostname: "panel.{{ domain_name }}"
-acme_email: "admin@example.com"
+# One address for everything: Let's Encrypt, the panel admin, Beszel, the panel's outgoing mail.
+# Use the same one for notification_email in oci/terraform.tfvars. Make sure mail to it reaches
+# you, for example with a forward at your registrar.
+admin_email: "admin@{{ domain_name }}"
+acme_email: "{{ admin_email }}"
 # Use Let's Encrypt staging while DNS/firewall are being sorted out, to avoid rate limits.
 acme_staging: false
 timezone: "Europe/Warsaw"
@@ -18,7 +22,7 @@ tailscale_tags: ["tag:gameserver"]
 
 # First panel admin, created headlessly before the panel is exposed. Password lives in the vault.
 calagopus_admin_username: "admin"
-calagopus_admin_email: "admin@example.com"
+calagopus_admin_email: "{{ admin_email }}"
 
 # Websites. Caddy gets HTTPS for each host automatically once its DNS points at the server.
 # Each site uses exactly one of:

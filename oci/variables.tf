@@ -25,6 +25,17 @@ variable "notification_email" {
   description = "Receives budget alerts and monitoring alarms. Confirm the OCI subscription email after the first apply."
 }
 
+variable "mail_from_address" {
+  type        = string
+  default     = ""
+  description = "Sender address for the panel's mail via OCI Email Delivery, e.g. admin@example.com. Empty = no mail setup (see email.tf)."
+
+  validation {
+    condition     = var.mail_from_address == "" || can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.mail_from_address))
+    error_message = "mail_from_address must be empty or an email address."
+  }
+}
+
 variable "instance_name" {
   type    = string
   default = "calagopus"

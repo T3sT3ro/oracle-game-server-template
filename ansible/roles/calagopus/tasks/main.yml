@@ -1,14 +1,28 @@
-# Wings sets disk quotas with quotactl(), which needs the real block device inside the
-# container (for example /dev/sdb, whatever the kernel calls it today).
-- name: Find the data volume's kernel device
+# Wings sets disk quotas with quotactl(), which needs the data disk's block device inside the
+# container, under the name /proc/mounts shows (sda, sdb, ...). That name can change between
+# boots, so compose.yml passes the stable path under every name in calagopus_data_device_names.
+- name: Find the data volume's current kernel device
   ansible.builtin.command: findmnt -no SOURCE {{ data_mount_point }}
   register: calagopus_data_source
   changed_when: false
   check_mode: false # read-only; must also run during --check
 
-- name: Remember the data volume's kernel device
-  ansible.builtin.set_fact:
-    calagopus_data_device: "{{ calagopus_data_source.stdout | trim }}"
+- name: Resolve the data volume's stable path
+  ansible.builtin.command: readlink -f {{ data_block_device }}
+  register: calagopus_data_stable
+  changed_when: false
+  check_mode: false # read-only; must also run during --check
+
+- name: Check the stable path is the mounted data volume, under a name the container knows
+  ansible.builtin.assert:
+    that:
+      - calagopus_data_stable.stdout == calagopus_data_source.stdout
+      - calagopus_data_source.stdout | basename in calagopus_data_device_names
+    fail_msg: >-
+      {{ data_block_device }} points at {{ calagopus_data_stable.stdout }}, but {{ data_mount_point }}
+      is on {{ calagopus_data_source.stdout }}. Check data_block_device, or add the name to
+      calagopus_data_device_names.
+    quiet: true
 
 - name: Create stack directories
   ansible.builtin.file:

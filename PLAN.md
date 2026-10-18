@@ -22,11 +22,18 @@ Priorities: **security** and **analytics/observability** first, then convenience
 - Minecraft by name is live (2026-10-18): DNS wildcard `*`, private allocations
   `172.18.0.1:25700-25799`, the vanilla server (Paper 26.3) on `172.18.0.1:25700`, mc-router on
   25565. `vanilla.mc.<domain>` answers a server-list ping from the internet, with no port.
+- 2026-10-19: rebooted onto kernel 7.0 (pending since September); everything came back after
+  two fixes (mc-router restart, data-disk name swap). One address everywhere: `admin@<domain>`
+  (Let's Encrypt, panel admin, Beszel login, Oracle alarms).
+- 2026-10-19: `infra` applied (alarm address, panel mail, Factorio's 34197/udp); Oracle's
+  subscription confirmed at `admin@<domain>`. Panel mail works: DKIM CNAME, SPF include and
+  DMARC (`p=none`) at Porkbun, SMTP login in the panel, test email received.
 - **Still open:**
+  - Login captcha: Turnstile widget, site key in `vars.yml`, secret via `init-vault.sh`,
+    `--tags calagopus`.
+  - Factorio: allocation `0.0.0.0:34197`, a server from the "Factorio ARM64" egg.
   - Delete the leftover `0.0.0.0:25565` allocation from the node (nothing uses it).
-  - Factorio, when wanted: `game_default_ports` with 34197/udp in `terraform.tfvars`, then
-    `./deploy.sh infra`, and the allocation `0.0.0.0:34197` in the panel.
-  - Beszel alerts.
+  - Beszel alerts (D8), world backup policy in the panel.
 
 ### Code status (2026-10-16, first implementation pass)
 
@@ -117,8 +124,11 @@ These ran on throwaway containers on a workstation, with all data in a scratch f
 - [x] Tailscale Services verified 2026-10-18: `logs` and `status` answer over HTTPS with their own
   Let's Encrypt certificates; old `:8443`/`:8444` closed. After defining or renaming a service in the
   console, the server had to re-advertise it (`serve … off`, then on) before clients got a route.
-- [ ] Boot order after a reboot: `nofail` mount + `RequiresMountsFor`, DOCKER-USER rules restored
-      from `rules.v4`, Tailscale back up, serve config persisted.
+- [x] Boot order after a reboot (2026-10-19): data disk mounted (as `sda` now, by label), our
+      INPUT rules and the DOCKER-USER block restored, Tailscale and both Services back, all
+      compose stacks up, Wings restarted the running game server. Found and fixed: mc-router
+      stayed down (`docker kill --signal` had marked it manually stopped), and the panel had the
+      boot disk after the `sda`/`sdb` swap, which broke quotas (now mapped by stable path).
 - [ ] A game server on a `0.0.0.0` allocation in `game_port_range` is reachable; SFTP on 2022.
 - [x] Alloy reads the host journal (Loki has `docker`, `caddy`, `journal`, `wings`).
 - [x] Caddy reaches a game server's port on `172.18.0.1:<port>` on the server's Docker 29
@@ -258,7 +268,12 @@ shown there:
 - [x] `no-new-privileges` everywhere, `cap_drop: [ALL]` where it works (Caddy, Valkey, Loki), read-only rootfs (Caddy, Loki, socket proxy).
 - [x] Read-only socket proxy for monitoring tools.
 - [x] Panel baseline enforced every run: registration off, 2FA for admins, telemetry off, HTTPS URL.
-- [ ] CAPTCHA on login (Admin → Settings; needs a provider key).
+- [x] Login captcha, managed by Ansible: `calagopus_captcha_provider: turnstile` + site key,
+      secret in the vault; `none` as the way back in. [ ] Create the Turnstile widget and turn it on.
+- [x] Panel mail via OCI Email Delivery (`oci/email.tf`, off until `mail_from_address` is set);
+      SMTP login pasted in the panel UI because the panel encrypts it. Applied, DNS added,
+      test email received (2026-10-19).
+- [x] One address for everything: `admin_email` (`admin@<domain>`), also as `notification_email`.
 - [x] `.vault_pass` 600; `init-vault.sh`. [ ] Run it; store vault password + encryption key in a password manager.
 
 ### Phase 3: observability and analytics (middle option)
@@ -334,3 +349,6 @@ Backups come in three layers (see README → Backups):
 | D11 | Websites and apps | `web` role, `sites:` list, `apps/` folders, blog at the apex via `publish-site.sh` | decided 2026-10-17 |
 | D12 | Dashboard addresses | Tailscale Services `logs` (Grafana) and `status` (Beszel), no ports | decided 2026-10-18 |
 | D13 | Game addresses | `<server>.<game>.<domain>` with one wildcard DNS record, set once (no DNS automation, no API keys on the server). Minecraft Java by name with mc-router on 25565 and private `172.18.0.1` allocations (instead of per-server SRV records; also hides servers from IP scanners). Factorio and other games: the server on the game's default port (`game_default_ports`) needs no port, the rest use name + port. Rejected: an on-instance nameserver (public port 53 for SRV only) and Caddy layer4 (needs a custom build, can't read the Minecraft handshake) | decided 2026-10-18 |
+| D14 | Admin email | One address, `admin@<domain>` (registrar forward), for Let's Encrypt, the panel admin, Beszel, Oracle alarms and panel mail | decided 2026-10-19 |
+| D15 | Panel mail | OCI Email Delivery via Terraform (free 3,000/month), port 465 implicit TLS; SMTP login set once in the panel UI | decided 2026-10-19 |
+| D16 | Login captcha | Cloudflare Turnstile (free, no DNS move), keys managed by Ansible; Cap (self-hosted) was the alternative | decided 2026-10-19 |

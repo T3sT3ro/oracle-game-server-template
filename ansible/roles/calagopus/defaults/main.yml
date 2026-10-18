@@ -6,6 +6,8 @@ calagopus_backend_subnet: 10.210.2.0/24
 
 # Wings (integrated in the AIO image).
 calagopus_wings_disk_limiter_mode: xfs_quota
+# Names the data disk might get from the kernel (they can swap between boots).
+calagopus_data_device_names: [sda, sdb, sdc]
 calagopus_wings_websocket_max_connections: 512
 
 # Panel settings enforced on every run (security baseline). Edit here, not in the UI:
@@ -15,3 +17,11 @@ calagopus_settings:
   "app::registration_enabled": "false"
   "app::telemetry_enabled": "false"
   "app::two_factor_requirement": "admins"
+
+# Login captcha (also on password reset, registration and new subusers).
+#   ""          leave it as set in the panel UI (default)
+#   "turnstile" Cloudflare Turnstile: set calagopus_turnstile_site_key here and
+#               vault_turnstile_secret_key in the vault (scripts/init-vault.sh asks for it)
+#   "none"      turn it off, for example if a wrong key locks you out of the login page
+calagopus_captcha_provider: ""
+calagopus_turnstile_site_key: ""

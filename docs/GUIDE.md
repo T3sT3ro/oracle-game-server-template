@@ -169,7 +169,7 @@ through the Docker socket, on its own Docker network.
 
 | File | Holds | Tracked in git? |
 | :--- | :--- | :--- |
-| `oci/terraform.tfvars` | Oracle account IDs, region, `notification_email`. Optionally `game_port_range`, `game_default_ports`, `instance_ocpus`, etc. | No |
+| `oci/terraform.tfvars` | Oracle account IDs, region, `notification_email`. Optionally `mail_from_address`, `game_port_range`, `game_default_ports`, `instance_ocpus`, etc. | No |
 | `ansible/group_vars/all/vars.yml` | Domain, emails, timezone, Tailscale hostname, `sites:`, `apps:`, `minecraft_servers:`. Any role default can be overridden here. | No |
 | `ansible/group_vars/all/vault.yml` | Passwords and keys (see [secrets inventory](#secrets-inventory)). | No (encrypted anyway) |
 | `apps/<name>/` | Your app's compose file and config. | Yes, so no secrets in here |
@@ -190,7 +190,8 @@ run**, then **`-e` extra vars**. In practice:
 | :--- | :--- | :--- |
 | `domain_name` | — | Used to build hostnames. |
 | `panel_hostname` | `panel.{{ domain_name }}` | The panel's public hostname. Also written into the panel's `app::url` setting. |
-| `acme_email` | — | Let's Encrypt account email. |
+| `admin_email` | `admin@{{ domain_name }}` | The one address used everywhere below (and, by hand, as `notification_email` in tfvars). |
+| `acme_email` | `{{ admin_email }}` | Let's Encrypt account email. |
 | `acme_staging` | `false` | Use Let's Encrypt staging (untrusted certificates, generous rate limits) while testing DNS. |
 | `timezone` | `Europe/Warsaw` | Host timezone. Also sets the time of the 05:30 reboot window. Passed as `TZ` to containers. |
 | `data_block_device` | `/dev/oracleoci/oraclevdb` | Consistent device path of the data volume. |
@@ -203,6 +204,8 @@ run**, then **`-e` extra vars**. In practice:
 | `apps` | `[]` | Folder names in `apps/` to deploy. |
 | `minecraft_servers` | `[]` | Minecraft servers by name: `{ name, port }`, port of a `172.18.0.1` allocation. Empty means no mc-router. |
 | `games_minecraft_subdomain` | `mc` | Players join `<name>.<this>.<domain>`. |
+| `calagopus_captcha_provider` | `""` | `turnstile`, `none`, or `""` (leave the UI's choice). |
+| `calagopus_turnstile_site_key` | `""` | Public site key of the Turnstile widget. |
 | `calagopus_settings` | 4 keys | Panel settings forced on every run (role default; override the whole dict to change). |
 | `calagopus_wings_disk_limiter_mode` | `xfs_quota` | Per-game-server disk limits. Set `none` if quotas don't work on the host. |
 | `observability_loki_retention` | `720h` | How long logs are kept. |
@@ -371,6 +374,31 @@ charge emails you.
 - `instance_id`
 - `private_ip`: the target for Bastion sessions.
 - `data_device`
+- `mail_smtp`, `mail_smtp_password` (sensitive), `mail_dns_records`: only when
+  `mail_from_address` is set (next section).
+
+### `email.tf`
+
+Panel mail through **OCI Email Delivery**. Every resource has `count = 0` until
+`mail_from_address` is set in tfvars.
+
+- `oci_email_email_domain` for the address's domain, `oci_email_dkim` (its CNAME must be added
+  at the registrar), and `oci_email_sender` for the address itself.
+- `oci_identity_smtp_credential` on your API user (`user_ocid`). Oracle shows the password only
+  at creation, and the provider can't read it back, so **Terraform state holds the only copy**
+  (the output is marked sensitive). Each user can have at most 2 SMTP credentials.
+- **SPF:** Oracle's include depends on the region: `eu.rp.oracleemaildelivery.com` for EU
+  regions, `ap.` for Asia-Pacific, none for the Americas. A domain has only one SPF record, so
+  it's added to the registrar's existing one (with Porkbun forwarding: 7 DNS lookups, under the
+  limit of 10).
+- **SMTP:** `smtp.email.<region>.oci.oraclecloud.com`, port 465 with implicit TLS (Oracle's
+  recommendation; 587 STARTTLS works too, 25 is blocked from OCI).
+- **Cost:** 3,000 emails a month are free; above that it's billed (about $0.085 per 1,000).
+  There's no hard cap; the $1 budget is the tripwire. The panel sends a handful a month.
+- **Why the panel's SMTP settings are set by hand:** Calagopus encrypts `::mail_smtp_username`
+  and `::mail_smtp_password` with `APP_ENCRYPTION_KEY` (simple_crypt), so a plain SQL write
+  like the other settings would break settings loading. The only other route is
+  `PUT /api/admin/settings` with an admin API key, which is a manual step anyway.
 
 ## 8. Host layer (Ansible roles 1–5)
 
@@ -649,8 +677,15 @@ Wings applies per-server disk limits with XFS project quotas (`xfs_quota`, which
 includes). Setting limits calls `quotactl()`, which needs `CAP_SYS_ADMIN` **and access to the
 block device**. So, when `calagopus_wings_disk_limiter_mode` is `xfs_quota`:
 
-- The role looks up the real device behind `/mnt/data` with `findmnt` (for example `/dev/sdb`).
-- That device is passed into the container under the same name, plus `cap_add: [SYS_ADMIN]`.
+- `xfs_quota` inside the container looks for the device under the name `/proc/mounts` shows,
+  for example `/dev/sda`. **That kernel name can swap between boots**: on 2026-10-19 the data
+  disk came back as `sda` and the boot disk as `sdb`, where it had been the other way round.
+- So the stable path (`data_block_device`, `/dev/oracleoci/oraclevdb`) is passed in under every
+  name in `calagopus_data_device_names` (`sda`, `sdb`, `sdc`). Docker resolves the symlink each
+  time the container starts, so all three always point at the data disk, never at the boot disk.
+- The role checks that the stable path is the disk mounted on `/mnt/data`, and that its current
+  name is in the list. Add a name there if you ever attach more disks.
+- Plus `cap_add: [SYS_ADMIN]`.
 
 This adds no real privilege: the container already holds the Docker socket.
 
@@ -759,6 +794,20 @@ Details that matter:
 - **Registration off, as tested:** `POST /api/auth/register` returns `"registration is disabled"`.
   Subuser invites from the panel still create accounts (see [friends](#give-a-friend-control-of-one-game-server)).
 
+### Login captcha and other settings Ansible can't or won't own
+
+- **Captcha** (`calagopus_captcha_provider`): Calagopus stores captcha keys as plain settings
+  (`::captcha_provider`, `::turnstile_site_key`, `::turnstile_secret_key`), so Ansible adds them
+  to the enforced settings when the provider is `turnstile`. `none` forces it off, which is the
+  way back in if a wrong key blocks every login. `""` (the default) leaves the panel UI in
+  charge. The settings write hides its output (`no_log`) when the secret is part of it.
+  - The captcha applies to login, registration, password reset and adding a subuser.
+  - An assert refuses `turnstile` with an empty site key or secret.
+- **Mail** is set in the panel UI, because the SMTP login is stored encrypted (see
+  [`email.tf`](#emailtf)).
+- **Settings reload:** the panel re-reads the `settings` table every 60 seconds, so SQL changes
+  apply without a restart.
+
 ### Smoke test (`tasks/smoke.yml`)
 
 - The panel answers `curl http://127.0.0.1:8000/` inside its container.
@@ -829,6 +878,9 @@ sequenceDiagram
   `"default-server": null`. Hostnames match regardless of case.
 - **Reloads don't kick anyone.** A changed `routes.json` notifies a handler that sends mc-router
   `SIGHUP`. It re-reads the file without restarting.
+  - **The signal goes straight to the process** (`kill -HUP <pid>` on the host), not through
+    `docker kill --signal`. Docker marks any container it signalled as "manually stopped", and
+    `restart: unless-stopped` then skips it at boot. The first reboot (2026-10-19) showed this.
 - **mc-router joins `calagopus_nw`** and connects to the gateway address, like Velocity or
   BungeeCord setups reaching backends on `172.18.0.1`. From the same network, Docker hands that
   connection to `docker-proxy` on the host instead of forwarding it. So it needs the
@@ -1216,6 +1268,8 @@ That's why:
 | `vault_beszel_admin_password` | init-vault | Beszel's environment | Beszel, first start only | Change it in the Beszel UI. |
 | `vault_tailscale_authkey` | You (Tailscale console) | `/run/tailscale-authkey`, deleted right after use | `tailscale up`, first join | One-off. It can expire once the node has joined. |
 | `vault_app_env.<app>.*` | You | `apps/<app>/secrets.env` (0600) | Your app | Change the vault and run `--tags web`. |
+| `vault_turnstile_secret_key` | You (Cloudflare Turnstile), via init-vault | Panel `settings` table (plain) | Panel | Rotate in Cloudflare, update the vault, run `--tags calagopus`. |
+| SMTP password | Terraform (`oci_identity_smtp_credential`) | Terraform state on your laptop; panel DB (encrypted) | Panel | Taint the credential, apply, paste the new one in the panel. |
 | `ansible/.vault_pass` | init-vault | Your laptop only | Ansible | `ansible-vault rekey`, then update the file. |
 
 ## 14. Data, storage and backups
@@ -1461,6 +1515,11 @@ later):
     nothing. Port 25700 isn't reachable from outside. The local test had missed one thing:
     Oracle's INPUT `REJECT` blocked mc-router's connection to the gateway until the firewall
     role allowed the private range.
+- **Reboot of the real server (2026-10-19):** the data disk, firewall rules, Tailscale and
+  its Services, the panel and Wings (which restarted the running game server) came back by
+  themselves. Two bugs showed up and were fixed: mc-router stayed down (the `docker kill`
+  quirk), and the panel had the boot disk instead of the data disk after a device-name swap,
+  which broke quotas.
 - **Dry run:** bootstrap in `--check` mode against a running stack: 0 failures, 0 changes.
 - **Not testable locally:** the AIO image with real Wings, XFS quotas, Tailscale, the iptables
   rules on Oracle's image, the reboot order, Terraform against Oracle. These are listed in
@@ -1545,6 +1604,13 @@ later):
 48. **Same-network traffic to `172.18.0.1` hits the host firewall.** Docker forwards gateway
     ports only for other networks, so anything on `calagopus_nw` (mc-router, a Velocity proxy)
     needs the `private-allocations` rule. It covers 25700–25799 only. ([8](#role-firewall))
+49. **`docker kill --signal` counts as a manual stop.** Even a harmless `SIGHUP` sets
+    `HasBeenManuallyStopped`, and `unless-stopped` containers then stay down after a reboot.
+    Signal the host PID instead. ([9](#game-addresses-role-games-and-mc-router))
+50. **Disk names swap between boots** (`sda`/`sdb`). Never template a kernel device name; pass
+    the stable path. ([9](#quirk-disk-quotas-need-sys_admin-and-the-block-device))
+51. **The panel's SMTP login can't be written with SQL**: it's encrypted with the panel's key.
+    Set mail in the panel UI. ([7](#emailtf))
 
 ## 18. Known gaps
 
@@ -1559,8 +1625,8 @@ In rough priority order:
      September 2026.
    - Most Steam-only dedicated servers (Valheim, Palworld, Satisfactory, …) are x86-only and
      would need slow emulation.
-3. **Email (SMTP)** for the panel: invites, password resets, email 2FA. Oracle's Email Delivery
-   is free up to 3,000 emails a month and needs SPF/DKIM records.
+3. **Email 2FA and email verification** are still off. Panel mail works since 2026-10-19
+   (`oci/email.tf`, README "Email from the panel"), so they could be turned on now.
 4. **Backups:** the nightly `pg_dump`, an off-site copy (within the 10 GB Standard Object
    Storage), and a tested restore. In progress in a separate branch.
 5. **CrowdSec:** automatic banning based on Caddy, SSH and panel-login logs. In the same
