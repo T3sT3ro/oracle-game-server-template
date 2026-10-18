@@ -250,6 +250,13 @@ policy:
 ## Before you start
 
 1. **Tools.** Run `nix develop` to get Terraform, Ansible, ansible-lint, shellcheck and oci-cli.
+   Terraform's licence keeps it out of nix's binary cache, so nix compiles it, which takes a few
+   minutes. Run this once, and again after `nix flake update`, so nix's garbage collector keeps
+   the build instead of deleting it:
+
+   ```bash
+   nix develop --profile .direnv/flake-profile -c true
+   ```
 2. **Oracle.**
    - An API key in `oci/api_key.pem`.
    - `oci/terraform.tfvars` with `user_ocid`, `fingerprint`, `tenancy_ocid`, `region`,
@@ -390,6 +397,7 @@ Preview changes without applying them:
 | The playbook stops at "Require MagicDNS + HTTPS certificates" | Turn on HTTPS Certificates on the Tailscale DNS page. |
 | The playbook stops at "Publishing a Tailscale Service failed" | Define the `logs` and `status` services in the Tailscale console and add them to `autoApprovers` (see Before you start). |
 | `https://logs.…` doesn't load | The service is waiting for approval (Tailscale console → Services), or your policy has no grant for it. |
+| `https://logs.…` resolves but times out, after you defined or renamed a service in the console | Tailscale hasn't noticed that the server serves it. On the server, run `sudo tailscale serve --service=svc:logs --https=443 off` (same for `status`), then re-run `./deploy.sh configure --tags tailscale`. |
 | You can't SSH in | Tailscale is down on the server or on your device. Use OCI Bastion (see Everyday tasks). |
 | Beszel shows the server as "pending" | Normal for the first minute after a restart. |
 | The disk is filling up | Check Beszel. Usual causes: game backups (lower the retention) or a very chatty log. |

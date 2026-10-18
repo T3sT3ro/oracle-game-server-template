@@ -143,7 +143,7 @@ through the Docker socket, on its own Docker network.
 | `deploy.sh` | `infra` / `bootstrap` / `configure`. See [section 6](#6-the-deploy-flow-deploysh). |
 | `scripts/init-vault.sh` | Creates or completes the encrypted Ansible vault without printing secrets. |
 | `scripts/publish-site.sh` | Uploads a built static site over Tailscale with `rsync --delete`. |
-| `flake.nix` | `nix develop` shell: terraform, ansible, ansible-lint, openssh, jq, shellcheck, oci-cli. |
+| `flake.nix` | `nix develop` shell: terraform, ansible, ansible-lint, openssh, jq, shellcheck, oci-cli. Terraform is unfree, so it isn't in the binary cache and nix compiles it. `nix develop --profile .direnv/flake-profile` makes the shell a GC root, so automatic garbage collection doesn't delete the build (`.direnv/` is gitignored). |
 | `oci/*.tf` | Terraform. `api_key.pem`, `terraform.tfvars` and `terraform.tfstate` live here and are gitignored. |
 | `ansible/ansible.cfg` | Inventory path, vault password file, SSH options. |
 | `ansible/site.yml` | The playbook: a vault sanity check, then 8 roles in a fixed order. |

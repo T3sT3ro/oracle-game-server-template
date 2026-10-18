@@ -15,7 +15,7 @@ Priorities: **security** and **analytics/observability** first, then convenience
 - Running: panel + Wings (AIO), Postgres, Valkey, Caddy, Grafana, Loki, Alloy, Beszel hub and
   agent, socket proxy. Admin created, registration off, setup wizard closed, telemetry off.
 - Admin access over Tailscale: `ssh ubuntu@calagopus`, Grafana `https://logs.<tailnet>.ts.net`,
-  Beszel `https://status.<tailnet>.ts.net` (Tailscale Services; until deployed: `:8443`/`:8444`).
+  Beszel `https://status.<tailnet>.ts.net` (Tailscale Services).
 - **Still open:**
   - Close public SSH: `./deploy.sh infra` removes the `SSH bootstrap` rule.
   - DNS `A` record `panel` → server, for the HTTPS certificate.
@@ -37,7 +37,7 @@ Legend: ✅ implemented + validated locally · 🟡 implemented, needs the real 
 | Host hardening | `roles/base`, `roles/firewall` | 🟡 | sshd drop-in (validated before reload), unattended upgrades + reboot window, sysctls, UFW removed, metadata service blocked for containers |
 | Data volume | `roles/storage` | 🟡 | Label mount + `prjquota`, refuses foreign filesystems, Docker requires the mount |
 | Docker | `roles/docker` | 🟡 | `local` log driver with caps, `live-restore`, address pools clear of Wings/VCN |
-| Tailscale | `roles/tailscale` | 🟡 | Tagged join via key file; dashboards as Tailscale Services `logs` (Grafana) and `status` (Beszel); fails fast if HTTPS certs are off |
+| Tailscale | `roles/tailscale` | ✅ | Tagged join via key file; dashboards as Tailscale Services `logs` (Grafana) and `status` (Beszel); fails fast if HTTPS certs are off |
 | Calagopus stack | `roles/calagopus` | ✅ | AIO + Postgres 18 + Valkey, digest-pinned. Locally tested with the standalone image: `/.env` loading, secrets absent from `docker inspect`, idempotent bootstrap (3 changes → 0), registration blocked, wizard closed, admin API returns 403 until 2FA, HTTP→HTTPS, token redaction in access logs |
 | Wings on AIO | `roles/calagopus` | 🟡 | Data on the volume at identical paths; `xfs_quota` via `SYS_ADMIN` + device; smoke test checks quotas on the host |
 | Websites + apps | `roles/web`, `apps/`, `scripts/publish-site.sh` | ✅ | Caddy in its own role. One `sites:` list (static / proxy / redirect), apps as plain compose folders, blog upload over Tailscale. Locally tested, see below |
@@ -107,6 +107,9 @@ These ran on throwaway containers on a workstation, with all data in a scratch f
 
 - [x] `xfs_quota` works from inside the AIO container (verified: accounting + enforcement ON on `wings/lib`).
 - [x] `tailscale serve` coexists with Caddy on :443 (verified with :8443/:8444; Services use their own addresses).
+- [x] Tailscale Services verified 2026-10-18: `logs` and `status` answer over HTTPS with their own
+  Let's Encrypt certificates; old `:8443`/`:8444` closed. After defining or renaming a service in the
+  console, the server had to re-advertise it (`serve … off`, then on) before clients got a route.
 - [ ] Boot order after a reboot: `nofail` mount + `RequiresMountsFor`, DOCKER-USER rules restored
       from `rules.v4`, Tailscale back up, serve config persisted.
 - [ ] A game server on a `0.0.0.0` allocation in `game_port_range` is reachable; SFTP on 2022.
