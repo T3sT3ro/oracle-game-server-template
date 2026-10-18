@@ -48,6 +48,32 @@
     line: '-A INPUT -p udp -m udp --dport 41641 -m comment --comment tailscale-direct -j ACCEPT'
     insertbefore: '^-A INPUT -j REJECT'
 
+# Private allocations (172.18.0.1:<port>). Docker only forwards a gateway port into the game
+# container for traffic from OTHER networks. Traffic from Wings' own network (mc-router, a
+# Velocity proxy) goes to docker-proxy on the host instead, and Oracle's INPUT REJECT would
+# refuse it. Accept exactly the private range from that network; nothing else on the host.
+- name: Let Wings' network reach private allocations on its gateway (live)
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: "{{ wings_network }}"
+    destination: "{{ wings_gateway_ip }}"
+    protocol: "{{ item }}"
+    destination_port: "{{ private_allocation_ports }}"
+    jump: ACCEPT
+    action: insert
+    rule_num: 1
+    comment: private-allocations
+  loop: [tcp, udp]
+
+- name: Let Wings' network reach private allocations on its gateway (persisted)
+  ansible.builtin.lineinfile:
+    path: /etc/iptables/rules.v4
+    line: >-
+      -A INPUT -d {{ wings_gateway_ip }}/32 -i {{ wings_network }} -p {{ item }} -m {{ item }}
+      --dport {{ private_allocation_ports }} -m comment --comment private-allocations -j ACCEPT
+    insertbefore: '^-A INPUT -j REJECT'
+  loop: [tcp, udp]
+
 # Game servers run untrusted code. Stop containers from reaching the OCI metadata service
 # (169.254.0.0/16) except DNS, mirroring what Oracle's InstanceServices chain does for host users.
 - name: Declare DOCKER-USER chain for boot-time restore (Docker reuses it)

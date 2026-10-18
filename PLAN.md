@@ -19,10 +19,11 @@ Priorities: **security** and **analytics/observability** first, then convenience
 - Done since: public SSH closed, DNS `panel` → server with a Let's Encrypt certificate, the
   stale `/etc/hosts` line removed, public allocations `0.0.0.0:25500-25600` added, one Minecraft
   server ("Vanilla latest stable") created on `0.0.0.0:25565` (not installed yet).
+- Minecraft by name is live (2026-10-18): DNS wildcard `*`, private allocations
+  `172.18.0.1:25700-25799`, the vanilla server (Paper 26.3) on `172.18.0.1:25700`, mc-router on
+  25565. `vanilla.mc.<domain>` answers a server-list ping from the internet, with no port.
 - **Still open:**
-  - Minecraft by name: add the private allocations (`172.18.0.1`, 25700–25799), move the
-    vanilla server off `0.0.0.0:25565`, delete that allocation, add the DNS wildcard `*`, list
-    the server in `minecraft_servers`, run `--tags games` (README, "Game addresses").
+  - Delete the leftover `0.0.0.0:25565` allocation from the node (nothing uses it).
   - Factorio, when wanted: `game_default_ports` with 34197/udp in `terraform.tfvars`, then
     `./deploy.sh infra`, and the allocation `0.0.0.0:34197` in the panel.
   - Beszel alerts.
@@ -45,7 +46,7 @@ Legend: ✅ implemented + validated locally · 🟡 implemented, needs the real 
 | Tailscale | `roles/tailscale` | ✅ | Tagged join via key file; dashboards as Tailscale Services `logs` (Grafana) and `status` (Beszel); fails fast if HTTPS certs are off |
 | Calagopus stack | `roles/calagopus` | ✅ | AIO + Postgres 18 + Valkey, digest-pinned. Locally tested with the standalone image: `/.env` loading, secrets absent from `docker inspect`, idempotent bootstrap (3 changes → 0), registration blocked, wizard closed, admin API returns 403 until 2FA, HTTP→HTTPS, token redaction in access logs |
 | Wings on AIO | `roles/calagopus` | 🟡 | Data on the volume at identical paths; `xfs_quota` via `SYS_ADMIN` + device; smoke test checks quotas on the host |
-| Game addresses | `roles/games`, `oci/network.tf` | 🟡 | One DNS wildcard. mc-router on 25565: Minecraft by name (`<name>.mc.<domain>`) to private `172.18.0.1` allocations; opt-in via `minecraft_servers`. `game_default_ports` for portless Factorio etc. Routing, unknown-name rejection, SIGHUP reload and dashboard queries tested locally; `--check` clean on the server. Not deployed yet |
+| Game addresses | `roles/games`, `roles/firewall`, `oci/network.tf` | ✅ | One DNS wildcard. mc-router on 25565: Minecraft by name (`<name>.mc.<domain>`) to private `172.18.0.1` allocations; opt-in via `minecraft_servers`. `game_default_ports` for portless Factorio etc. Verified on the server: join by name from the internet, unknown names and bare IP refused, real client IPs in the log, events in Loki. Needed a firewall rule for same-network traffic to the gateway |
 | Websites + apps | `roles/web`, `apps/`, `scripts/publish-site.sh` | ✅ | Caddy in its own role. One `sites:` list (static / proxy / redirect), apps as plain compose folders, blog upload over Tailscale. Locally tested, see below |
 | Monitoring stack | `roles/observability` | ✅ | Beszel + Grafana/Loki/Alloy + socket proxy (Dozzle dropped 2026-10-17). See the test notes below |
 | Lint | — | ✅ | ansible-lint `production` profile: 0 findings; `terraform fmt`/`validate` pass |
@@ -120,12 +121,14 @@ These ran on throwaway containers on a workstation, with all data in a scratch f
       from `rules.v4`, Tailscale back up, serve config persisted.
 - [ ] A game server on a `0.0.0.0` allocation in `game_port_range` is reachable; SFTP on 2022.
 - [x] Alloy reads the host journal (Loki has `docker`, `caddy`, `journal`, `wings`).
-- [ ] Caddy reaches a game server's web port on `172.18.0.1:<port>` on the server's Docker
-      version (tested locally on Docker 28 with a stand-in network).
+- [x] Caddy reaches a game server's port on `172.18.0.1:<port>` on the server's Docker 29
+      (verified 2026-10-18 from the Caddy container to the vanilla server's 25700).
 - [ ] Moving the apex domain from GitHub Pages to the server: change its `A` records, then publish the blog.
 - [ ] Unattended Docker upgrade with `live-restore` keeps game servers running.
-- [ ] mc-router on the server: a real client joins `<name>.mc.<domain>` with no port; a bare-IP
-      connection gets nothing; connections show up on the Security overview.
+- [x] mc-router on the server (2026-10-18): a server-list ping to `vanilla.mc.<domain>` from
+      the internet with no port gets Paper's status; a bare-IP connection gets nothing; Loki has
+      the events. Found: Oracle's INPUT `REJECT` blocked same-network traffic to the gateway;
+      fixed with the `private-allocations` rule.
 
 ---
 
@@ -209,7 +212,7 @@ shown there:
 - [x] Smoke test at the end of the play.
 - [ ] Automate allocations for `game_port_range` (currently a manual step in the README).
 
-### Game addresses (done 2026-10-18, not deployed yet)
+### Game addresses (done and deployed 2026-10-18)
 
 - [x] Pattern `<server>.<game>.<domain>`, one wildcard DNS record (`*`) for everything.
 - [x] Two kinds of allocation: public `0.0.0.0` (25500–25600) and private `172.18.0.1`
@@ -219,6 +222,8 @@ shown there:
       Hardened container, no Docker socket. Empty list → mc-router stopped, 25565 free.
 - [x] The play stops with an explanation if port 25565 is taken; it prints each address and
       whether its server is up.
+- [x] Firewall: accept TCP/UDP from `calagopus_nw` to `172.18.0.1:25700-25799` (Docker hands
+      same-network gateway traffic to docker-proxy, which Oracle's INPUT REJECT refused).
 - [x] Security overview: connections per server name, unknown names by IP.
 - [x] Terraform opens 25565 separately if `game_port_range` ever stops covering it.
 - [x] `game_default_ports` (Terraform, empty by default): one server per game on its default

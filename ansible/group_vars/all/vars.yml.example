@@ -37,7 +37,7 @@ apps: []
 
 # Minecraft (Java) servers by name: players join <name>.mc.<domain>, no port needed.
 # For each server: give it a private allocation in the panel (IP 172.18.0.1, a port from
-# 25700-25799), add it here and run `./deploy.sh configure --tags games`. DNS: the one
+# 25700-25799; the firewall allows only that range), add it here and run `./deploy.sh configure --tags games`. DNS: the one
 # wildcard record (* -> the server's IP) covers every name. See the README, "Game addresses".
 minecraft_servers: []
 #  - { name: survival, port: 25700 }

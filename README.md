@@ -174,7 +174,7 @@ forwards them to that server, so any number of servers work without a port.
 To add a Minecraft server:
 
 1. In the panel, give the server an allocation on `172.18.0.1` with a free port from
-   25700–25799.
+   25700–25799. Stay in that range: the server's firewall lets mc-router reach only those ports.
 2. Add it to `ansible/group_vars/all/vars.yml`:
    ```yaml
    minecraft_servers:
@@ -511,7 +511,7 @@ Preview changes without applying them:
 | The playbook stops at "Publishing a Tailscale Service failed" | Define the `logs` and `status` services in the Tailscale console and add them to `autoApprovers` (see Before you start). |
 | `https://logs.…` doesn't load | The service is waiting for approval (Tailscale console → Services), or your policy has no grant for it. |
 | `https://logs.…` resolves but times out, after you defined or renamed a service in the console | Tailscale hasn't noticed that the server serves it. On the server, run `sudo tailscale serve --service=svc:logs --https=443 off` (same for `status`), then re-run `./deploy.sh configure --tags tailscale`. |
-| Players can't join `<name>.mc.…` | Check that `<name>.mc.<domain>` resolves to the server, the name is in `minecraft_servers` (then `--tags games`), and the playbook says "server is up". mc-router's log: `{container="games-mc-router-1"}` in Grafana. |
+| Players can't join `<name>.mc.…` | Check that `<name>.mc.<domain>` resolves to the server, the name is in `minecraft_servers` (then `--tags games`), and the playbook says "server is up". mc-router's log: `{container="games-mc-router-1"}` in Grafana. "no route to host" there means the server's port is outside 25700–25799, or the firewall rule is missing (`--tags firewall`). |
 | Players can't join `<name>.factorio.…` without a port | Only the server on the game's default port works without one. Check `game_default_ports` in `terraform.tfvars` (then `./deploy.sh infra`) and that the server's allocation is `0.0.0.0:34197`. Other servers need `name:port`. |
 | The playbook stops at "Explain why mc-router didn't start" | Usually a game server still uses port 25565. See [Move an existing Minecraft server](#move-an-existing-minecraft-server-to-a-name). |
 | You can't SSH in | Tailscale is down on the server or on your device. Use OCI Bastion (see Everyday tasks). |

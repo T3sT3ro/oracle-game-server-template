@@ -480,6 +480,16 @@ device, the tailnet name) look them up themselves.
 - **Removes UFW.** UFW and `iptables-persistent` fight each other, and UFW wouldn't protect
   Docker-published ports anyway.
 - **Accepts all traffic arriving on `tailscale0`**, and UDP 41641 (direct Tailscale connections).
+- **Lets Wings' network reach the private allocations.** It accepts TCP and UDP from
+  `calagopus_nw` to `172.18.0.1`, ports `private_allocation_ports` (25700–25799), and nothing
+  else on the host.
+  - **Why it's needed:** Docker forwards a published gateway port into the game container only
+    for traffic from *other* networks (its rule says `! -i calagopus_nw`). Traffic from
+    `calagopus_nw` itself goes to `docker-proxy` on the host, so it passes INPUT, and Oracle's
+    final `REJECT` refused it ("no route to host").
+  - **Who uses it:** mc-router and, later, any proxy running as a game server (Velocity,
+    BungeeCord). Caddy comes from the `web` network, so Docker forwards its traffic and it
+    never needed this rule.
 - **Blocks containers from the metadata service.** The `DOCKER-USER` chain rejects traffic from
   containers to `169.254.0.0/16`, except DNS to `169.254.169.254:53` (Oracle's resolver, which
   Docker's DNS forwards to).
@@ -819,9 +829,10 @@ sequenceDiagram
   `"default-server": null`. Hostnames match regardless of case.
 - **Reloads don't kick anyone.** A changed `routes.json` notifies a handler that sends mc-router
   `SIGHUP`. It re-reads the file without restarting.
-- **mc-router joins `calagopus_nw`** and connects to the gateway address. Docker DNATs that into
-  the game container on the same bridge; this is the same path Velocity/BungeeCord setups use to
-  reach backends on `172.18.0.1`.
+- **mc-router joins `calagopus_nw`** and connects to the gateway address, like Velocity or
+  BungeeCord setups reaching backends on `172.18.0.1`. From the same network, Docker hands that
+  connection to `docker-proxy` on the host instead of forwarding it. So it needs the
+  `private-allocations` INPUT rule from the [firewall role](#role-firewall).
 - **Hardening:** pinned image, runs as uid 65532, read-only filesystem, all capabilities
   dropped, `no-new-privileges`. No Docker socket (routes are static).
   `CONNECTION_RATE_LIMIT` is 5 new connections per second (default 1).
@@ -1126,7 +1137,7 @@ Single-binary Loki with filesystem storage in `/mnt/data/observability/loki`. It
 | Tailnet | 22 (host), 443 on `svc:logs` / `svc:status` | sshd, Grafana, Beszel | Your tailnet devices, as allowed by your tailnet grants |
 | Host loopback | 3000, 8090, 2375 | Grafana, Beszel hub, socket proxy | Processes on the host |
 | `web` network | 8000 | Panel HTTP | Caddy (and apps; harmless, since only Caddy is trusted for client IPs) |
-| `172.18.0.1` | allocations you create there (25700–25799) | Minecraft servers, game web ports | mc-router, Caddy, host only |
+| `172.18.0.1` | allocations you create there (25700–25799) | Minecraft servers, game web ports | mc-router, Caddy, game containers (firewall rule), host. Not the internet |
 | Inside containers | 64332 (Wings), 12345 (Alloy), 3100 (Loki), 5432, 6379 | Internal | Their own networks only |
 
 ### Why the host firewall doesn't protect Docker ports
@@ -1445,6 +1456,11 @@ later):
     live without a restart.
   - Both new dashboard queries against Loki with real mc-router log lines, IPv6 included.
   - The role in `--check` against the real server, with and without a listed server.
+  - **On the real server (2026-10-18):** a server-list ping to `vanilla.mc.<domain>` from the
+    internet, with no port, got Paper 26.3's status. An unknown name and the bare IP got
+    nothing. Port 25700 isn't reachable from outside. The local test had missed one thing:
+    Oracle's INPUT `REJECT` blocked mc-router's connection to the gateway until the firewall
+    role allowed the private range.
 - **Dry run:** bootstrap in `--check` mode against a running stack: 0 failures, 0 changes.
 - **Not testable locally:** the AIO image with real Wings, XFS quotas, Tailscale, the iptables
   rules on Oracle's image, the reboot order, Terraform against Oracle. These are listed in
@@ -1526,13 +1542,17 @@ later):
     makes `survival.mc` stop resolving. Keep game names on the wildcard. ([9](#game-addresses-role-games-and-mc-router))
 47. **Only one server per game can skip the port**, the one on the game's default port. Name
     routing needs a protocol that sends the name; Factorio's doesn't. ([9](#game-addresses-role-games-and-mc-router))
+48. **Same-network traffic to `172.18.0.1` hits the host firewall.** Docker forwards gateway
+    ports only for other networks, so anything on `calagopus_nw` (mc-router, a Velocity proxy)
+    needs the `private-allocations` rule. It covers 25700–25799 only. ([8](#role-firewall))
 
 ## 18. Known gaps
 
 In rough priority order:
 
 1. **The rest of the "verify on the real host" list** in PLAN.md. The first deployment ran
-   on 2026-10-18; mc-router and map ports via `172.18.0.1` haven't run on the server yet.
+   on 2026-10-18. Minecraft by name and the map-port path (Caddy → `172.18.0.1`) are verified
+   on the server.
 2. **ARM compatibility of games.**
    - Minecraft (Java) is fine.
    - Factorio has an official ARM64 Linux build, but only on the experimental channel as of

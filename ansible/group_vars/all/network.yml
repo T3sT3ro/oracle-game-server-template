@@ -14,6 +14,9 @@ caddy_ip: 10.210.1.2
 # gateway, 172.18.0.1, are private: Caddy and mc-router can reach them, the internet can't.
 wings_network: calagopus_nw
 wings_gateway_ip: 172.18.0.1
+# Ports for private allocations (on wings_gateway_ip), first:last. The firewall role lets
+# Wings' network reach exactly these on the gateway; see roles/firewall.
+private_allocation_ports: "25700:25799"
 
 # Private admin dashboards, published on your tailnet as Tailscale Services:
 # https://<name>.<tailnet>.ts.net (no port). Each name must first be defined in the Tailscale
