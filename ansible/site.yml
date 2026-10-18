@@ -23,4 +23,5 @@
     - { role: tailscale, tags: [tailscale] }
     - { role: calagopus, tags: [calagopus] }
     - { role: web, tags: [web] } # Caddy: panel, websites, apps. After calagopus on purpose.
+    - { role: games, tags: [games] } # mc-router. Needs the Wings network, so after calagopus.
     - { role: observability, tags: [observability] }

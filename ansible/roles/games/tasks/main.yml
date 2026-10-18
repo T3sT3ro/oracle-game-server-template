@@ -1,0 +1,110 @@
+- name: Check every Minecraft server has a valid name and port
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+      - item.port is defined
+      - item.port | int >= 1024
+      - item.port | int <= 65535
+    fail_msg: >-
+      minecraft_servers in vars.yml: '{{ item.name | default('?') }}' needs a name made of
+      lowercase letters, digits and dashes, and a port between 1024 and 65535.
+    quiet: true
+  loop: "{{ minecraft_servers | default([]) }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Check Minecraft server names are unique
+  ansible.builtin.assert:
+    that: >-
+      minecraft_servers | default([]) | map(attribute='name') | unique | length
+      == minecraft_servers | default([]) | length
+    fail_msg: "minecraft_servers in vars.yml: two servers have the same name."
+    quiet: true
+
+- name: Run mc-router when minecraft_servers lists a server
+  when: minecraft_servers | default([]) | length > 0
+  block:
+    - name: Create the games folders
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ games_stack_dir }}"
+        - "{{ games_stack_dir }}/config"
+
+    - name: Template mc-router compose file
+      ansible.builtin.template:
+        src: compose.yml.j2
+        dest: "{{ games_stack_dir }}/compose.yml"
+        mode: "0644"
+      register: games_compose_file
+
+    # World-readable: mc-router runs as an unprivileged user (65532).
+    - name: Template the Minecraft routes
+      ansible.builtin.template:
+        src: routes.json.j2
+        dest: "{{ games_stack_dir }}/config/routes.json"
+        mode: "0644"
+      notify: Reload Minecraft routes
+
+    # In --check, a new or changed compose file isn't on the server yet, so there's nothing to try.
+    - name: Start mc-router
+      when: not ansible_check_mode or games_compose_file is not changed
+      block:
+        - name: Start mc-router
+          community.docker.docker_compose_v2:
+            project_src: "{{ games_stack_dir }}"
+            state: present
+            pull: missing
+            remove_orphans: true
+            wait: true
+            wait_timeout: 60
+      rescue:
+        - name: Explain why mc-router didn't start
+          ansible.builtin.fail:
+            msg: >-
+              mc-router didn't start: {{ ansible_failed_result.msg | default('unknown error') }}.
+              The usual cause: a game server already uses port 25565
+              (a 0.0.0.0:25565 allocation). Move that server to a private allocation
+              ({{ wings_gateway_ip }}, ports 25700-25799), delete the 0.0.0.0:25565 allocation
+              in the panel, and run --tags games again. See the README, "Game addresses".
+
+    - name: Check which Minecraft servers are listening
+      ansible.builtin.command: timeout 2 bash -c '</dev/tcp/{{ wings_gateway_ip }}/{{ item.port }}'
+      loop: "{{ minecraft_servers }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: games_listening
+      changed_when: false
+      failed_when: false
+      check_mode: false # read-only; must also run during --check
+
+    - name: Minecraft addresses
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.name }}.{{ games_minecraft_subdomain }}.{{ domain_name }} ->
+          {{ wings_gateway_ip }}:{{ item.item.port }}
+          {{ '(server is up)' if item.rc == 0
+             else '(nothing listening yet: is the server running, on a ' ~ wings_gateway_ip ~ ' allocation?)' }}
+      loop: "{{ games_listening.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+# With no servers listed, port 25565 stays free for an ordinary 0.0.0.0:25565 allocation.
+- name: Stop mc-router when no Minecraft servers are listed
+  when: minecraft_servers | default([]) | length == 0
+  block:
+    - name: Look for an mc-router from earlier runs
+      ansible.builtin.stat:
+        path: "{{ games_stack_dir }}/compose.yml"
+      register: games_compose
+
+    - name: Stop mc-router
+      community.docker.docker_compose_v2:
+        project_src: "{{ games_stack_dir }}"
+        state: absent
+      when: games_compose.stat.exists

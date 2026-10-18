@@ -1,13 +1,16 @@
 # Every container image is pinned by tag AND digest (multi-arch index digest, works on arm64).
 # Upgrades are explicit: bump the tag, resolve the new digest with
 #   docker buildx imagetools inspect <image:tag> --format '{{json .Manifest.digest}}'
-# and run the playbook with --tags calagopus / observability.
+# and run the playbook with --tags calagopus / web / games / observability.
 images:
   # Calagopus (Panel + Wings all-in-one). Release notes: https://calagopus.com/docs/releases/panel
   calagopus_panel: "ghcr.io/calagopus/panel:1.2.5-aio@sha256:e6cc0f40695ff678cd45bb27e11a12071d30a38b30b3958d31617db3c97048fc"
   postgres: "ghcr.io/calagopus/pgautoupgrade:18.6-alpine@sha256:1c31f9c2d5722710d1fe34464c6b3e62213d3aff9d0808e87e231c6410e53575"
   valkey: "ghcr.io/calagopus/valkey:9.1.2@sha256:12cca648c3f4e6de36e6e9f195bed4c0ce1de13d905c3cff7ad13b0cfd7b5d56"
   caddy: "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"
+
+  # Games: Minecraft by name (players join <name>.mc.<domain>). https://github.com/itzg/mc-router
+  mc_router: "itzg/mc-router:1.47.2@sha256:64ae69eaa7a6800a79bbf962f027f4020878efa25183359115bc7f6ee569c36e"
 
   # Observability
   socket_proxy: "lscr.io/linuxserver/socket-proxy:3.4.7@sha256:e5d819de59b343c01b2fe7adc7fad3c7a60e5dba08e45f1ac317352bc08599b5"

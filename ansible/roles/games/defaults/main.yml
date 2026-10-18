@@ -1,0 +1,5 @@
+games_stack_dir: /opt/stacks/games
+
+# Players join <name>.<games_minecraft_subdomain>.<domain_name>, for example survival.mc.example.com.
+# The server list itself (`minecraft_servers:`) is set in vars.yml; see the README, "Game addresses".
+games_minecraft_subdomain: mc

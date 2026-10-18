@@ -24,6 +24,7 @@ flowchart LR
       caddy["Caddy<br/>HTTPS"]
       sites["Your website<br/>and apps"]
       panel["Calagopus<br/>panel + Wings"]
+      router["mc-router<br/>Minecraft by name"]
       games["Game servers"]
       db[("Postgres")]
       cache[("Valkey")]
@@ -46,7 +47,8 @@ flowchart LR
   players -- "HTTPS" --> caddy --> panel
   caddy --> sites
   players -- "SFTP 2022" --> panel
-  players -- "game ports" --> games
+  players -- "Minecraft 25565" --> router --> games
+  players -- "other game ports" --> games
   panel --> games
   panel --> db
   panel --> cache
@@ -78,6 +80,7 @@ flowchart LR
 | Calagopus panel + Wings | The web panel and the agent that runs game servers. One container ("all-in-one"). |
 | Postgres, Valkey | The panel's database and cache. They can't reach the internet. |
 | Caddy | Gets HTTPS certificates and sends each hostname to the right place: the panel, your website or an app. Logs every request. |
+| mc-router | Lets players join Minecraft servers by name (`survival.mc.example.com`) on the default port. Runs only if you list servers in `minecraft_servers`. |
 | Beszel | CPU, memory, disk and network graphs per server and per container. Sends alerts. |
 | Loki + Alloy | Alloy collects all logs, Loki keeps them for 30 days. |
 | Grafana | Searches the logs, live or past. Has a ready-made "Security overview" dashboard. |
@@ -123,10 +126,114 @@ Things that **would** cost money:
 - **Containers have only the access they need.** Image versions are pinned, so nothing updates
   by surprise. Containers can't gain extra privileges. The database has no internet access.
   Game servers can't reach Oracle's internal metadata service.
+- **Minecraft servers aren't directly on the internet.** They listen on private addresses, and
+  mc-router lets in only players who ask for a known name. Scanners that try the IP get nothing.
 - **The server updates itself.** Ubuntu, Docker and Tailscale security updates install
   automatically. If an update needs a reboot, it happens at 05:30.
 - **Known trade-off:** the panel container controls Docker, so a panel admin is effectively root
   on the server. That's why admins must use two-factor login.
+
+## Game addresses
+
+Players use names, not IPs: `<server>.<game>.<your domain>`, for example
+`survival.mc.example.com` or `islands.factorio.example.com`.
+
+**DNS, once:** one wildcard `A` record, `*` → the server's IP. Every name under your domain
+that has no record of its own now points at the server: game names, the panel, new websites.
+Records you already have (the apex, `www`, mail) keep working as before.
+
+Don't create records under a game label later (for example an `A` record for `mc` or
+`x.mc`). A real record there stops the wildcard from covering the names below it.
+
+**Who answers each kind of name:**
+
+| Kind | Example | Routed by | Players type |
+| :--- | :--- | :--- | :--- |
+| Minecraft (Java) | `survival.mc.example.com` | mc-router, by name | The name only |
+| Factorio and other games | `islands.factorio.example.com` | Nobody: the game never sends the name | The name only for the server on the game's default port, `name:port` for the others |
+| Web pages (panel, maps, apps) | `panel.example.com` | Caddy, by name | The name only |
+
+Only some protocols send the name the player typed. Minecraft Java and websites do; Factorio
+and most other games don't, so for them the port is what picks the server.
+
+**Allocations.** The panel gives each game server an *allocation*: an IP and a port. There are
+two kinds:
+
+| Allocation IP | Ports | Reachable from | Use for |
+| :--- | :--- | :--- | :--- |
+| `0.0.0.0` | 25500–25600, plus `game_default_ports` | The internet | Factorio and other games |
+| `172.18.0.1` | 25700–25799 | Only this server (mc-router, Caddy) | Minecraft servers, map web pages |
+
+The two ranges don't overlap, so a port can never be taken twice.
+
+### Minecraft servers
+
+mc-router listens on Minecraft's default port, 25565. It reads the name the player typed and
+forwards them to that server, so any number of servers work without a port.
+
+To add a Minecraft server:
+
+1. In the panel, give the server an allocation on `172.18.0.1` with a free port from
+   25700–25799.
+2. Add it to `ansible/group_vars/all/vars.yml`:
+   ```yaml
+   minecraft_servers:
+     - { name: survival, port: 25700 }
+     - { name: creative, port: 25701 }
+   ```
+3. Run `./deploy.sh configure --tags games`. The router reloads its list; nobody gets
+   disconnected. The playbook prints each address and whether the server is up.
+
+Players join `survival.mc.example.com`. Give them the name only: the panel shows
+`172.18.0.1:25700`, which works only on the server itself.
+
+Good to know:
+
+- **Port 25565 belongs to mc-router** once you list a server. Delete the `0.0.0.0:25565`
+  allocation in the panel so nobody picks it. If a server already uses it, the playbook stops and
+  says so.
+- **The Minecraft server sees every player coming from mc-router**, not from their own IP. Use
+  the whitelist (on by default) and bans by name, not IP bans. mc-router's log in Grafana has the
+  real IPs.
+- **Java Edition only.** Bedrock (and Geyser) needs its own public UDP port, like Factorio.
+- **The Security overview dashboard** shows connections per server name, and the IPs that asked
+  for names that don't exist (scanners).
+
+### Move an existing Minecraft server to a name
+
+For a server that already uses a public allocation such as `0.0.0.0:25565`:
+
+1. Admin → Nodes → Integrated Node → Allocations: add IP `172.18.0.1`, ports `25700-25799` (once).
+2. On the server's admin page, add `172.18.0.1:25700`, make it the primary allocation and remove
+   the old one. Restart the server.
+3. Delete the `0.0.0.0:25565` allocation from the node.
+4. Add the server to `minecraft_servers` and run `./deploy.sh configure --tags games`.
+
+### Factorio servers (and other games)
+
+Factorio uses UDP and never sends the name, so the port picks the server. The name still
+helps: players don't need the IP, and it keeps working if the IP changes.
+
+**Main server, no port.** Factorio's default port is 34197/udp. When a server uses it, players
+type just the name. Once:
+
+1. Open the port: in `oci/terraform.tfvars` add
+   ```hcl
+   game_default_ports = [{ name = "Factorio", proto = "UDP", port = 34197 }]
+   ```
+   and run `./deploy.sh infra`.
+2. In the panel, add the allocation `0.0.0.0:34197` and give it to that server.
+
+Players join `islands.factorio.example.com`.
+
+**More servers: name plus port.** Give each one a `0.0.0.0` allocation from 25500–25600 (UDP
+is open there too). Set the allocation's alias to the server's name, for example
+`factory.factorio.example.com`, so the panel shows players the full address:
+`factory.factorio.example.com:25510`.
+
+Other games work the same way: one server on the game's default port (add it to
+`game_default_ports`), the rest on name plus port. Two games with the same default port (for
+example Terraria and Satisfactory, both 7777) can't both use it.
 
 ## Websites and apps
 
@@ -191,21 +298,23 @@ Tebex) is much safer than running payment code yourself.
 
 Map plugins run a small web server inside the game server. To put it behind HTTPS:
 
-1. In the panel, add an allocation with IP **`172.18.0.1`** and a free port, for example 25501.
-   Assign it to the game server and set the plugin to use that port. `172.18.0.1` keeps the port
-   private: only Caddy can reach it, not the internet.
-2. Add a site: `{ host: "survival.minecraft.{{ domain_name }}", proxy: "172.18.0.1:25501" }`
-3. Point the DNS at the server and run `./deploy.sh configure --tags web`.
+1. In the panel, add a private allocation (IP **`172.18.0.1`**, a free port from 25700–25799,
+   for example 25701) to the game server, and set the plugin to use that port. Only Caddy can
+   reach it, not the internet.
+2. Add a site: `{ host: "survival.mc.{{ domain_name }}", proxy: "172.18.0.1:25701" }`
+3. Run `./deploy.sh configure --tags web`. The wildcard DNS record already covers the name.
 
-The same hostname can serve the map in a browser *and* the game. Players join
-`survival.minecraft.example.com` with the game's own port. With an `SRV` DNS record they don't
-even need to type the port.
+The same name works for the map in a browser *and* the game: Caddy answers on HTTPS, mc-router
+on Minecraft's port.
 
 ### DNS tips
 
-- **One record per hostname** works fine. Each one gets its own certificate.
-- **Wildcards save work:** an `A` record for `*.example.com` (or `*.minecraft.example.com`)
-  covers every name under it. Caddy still only answers for hostnames listed in `sites:`.
+- **One wildcard record (`*`) covers everything** under your domain that has no record of its
+  own: the panel, game names, new websites. Caddy still only answers for hostnames listed in
+  `sites:`, and mc-router only for names in `minecraft_servers`. Each site still gets its own
+  certificate.
+- **The apex (`example.com`) isn't covered** by the wildcard. It needs its own record, for
+  example when you move the blog there.
 - **Certificates are public.** Every hostname with a certificate shows up in public certificate
   logs. Don't rely on a hostname staying secret.
 
@@ -250,13 +359,9 @@ policy:
 ## Before you start
 
 1. **Tools.** Run `nix develop` to get Terraform, Ansible, ansible-lint, shellcheck and oci-cli.
-   Terraform's licence keeps it out of nix's binary cache, so nix compiles it, which takes a few
-   minutes. Run this once, and again after `nix flake update`, so nix's garbage collector keeps
-   the build instead of deleting it:
-
-   ```bash
-   nix develop --profile .direnv/flake-profile -c true
-   ```
+   The first time takes a few minutes: Terraform's licence keeps it out of nix's binary cache,
+   so nix compiles it. The shell then marks its tools as in use (`.direnv/tools`), so nix's
+   garbage collection keeps them.
 2. **Oracle.**
    - An API key in `oci/api_key.pem`.
    - `oci/terraform.tfvars` with `user_ocid`, `fingerprint`, `tenancy_ocid`, `region`,
@@ -287,9 +392,9 @@ policy:
    - Remove the default "allow everything" rule if it's still there (only if your other
      devices don't depend on it).
    - Create an auth key: not reusable, pre-approved, tag `tag:gameserver`.
-4. **DNS.** Point an `A` record for `panel.<your domain>` at the server's public IP
-   (`terraform -chdir=oci output public_ip`). Do the same for each website (see
-   [Websites and apps](#websites-and-apps)).
+4. **DNS**, right after `./deploy.sh infra` (it creates the IP): add one wildcard `A` record,
+   `*` → the server's public IP (`terraform -chdir=oci output public_ip`). It covers the panel,
+   game names and websites under your domain (see [Game addresses](#game-addresses)).
 
 ## First deployment
 
@@ -310,7 +415,8 @@ This creates all passwords and asks for the Tailscale auth key.
 ```
 
 This shows what Terraform will change and asks before applying. Oracle then emails you to
-confirm the alert subscription: **confirm it**, or you won't get alerts.
+confirm the alert subscription: **confirm it**, or you won't get alerts. Now add the wildcard
+DNS record (Before you start, step 4).
 
 ```bash
 ./deploy.sh bootstrap
@@ -325,8 +431,9 @@ After that:
    ansible-vault view --vault-password-file ansible/.vault_pass ansible/group_vars/all/vault.yml
    ```
    The panel will ask you to set up two-factor login first.
-2. **Add game ports:** Admin → Nodes → Integrated Node → Allocations. Use IP `0.0.0.0` and ports
-   from 25500 to 25600. Only that range is open.
+2. **Add game ports:** Admin → Nodes → Integrated Node → Allocations. Add IP `0.0.0.0` with
+   ports 25500–25600 (public; only that range is open), and IP `172.18.0.1` with ports
+   25700–25799 (private, for Minecraft by name and map pages). See [Game addresses](#game-addresses).
 3. **Add egg repositories** (game templates) and create your game servers.
 4. **Set up backups** (see [Backups](#backups)).
 5. **Set up alerts in Beszel:** add a notification URL, for example a Discord webhook.
@@ -364,6 +471,12 @@ Update only websites, apps and Caddy:
 ./deploy.sh configure --tags web
 ```
 
+Add or change a Minecraft server name (see [Game addresses](#game-addresses)):
+
+```bash
+./deploy.sh configure --tags games
+```
+
 Publish the blog after a change:
 
 ```bash
@@ -376,7 +489,7 @@ Preview changes without applying them:
 ./deploy.sh configure --check --diff
 ```
 
-- **Update the panel or monitoring:** change the version and digest in
+- **Update the panel, mc-router or monitoring:** change the version and digest in
   `ansible/group_vars/all/images.yml`. That file shows how to look up the digest. Then run the
   matching `--tags`. Read the [panel release notes](https://calagopus.com/docs/releases/panel) first.
 - **Update one of your apps:** change the image in `apps/<name>/compose.yml`, then
@@ -398,6 +511,9 @@ Preview changes without applying them:
 | The playbook stops at "Publishing a Tailscale Service failed" | Define the `logs` and `status` services in the Tailscale console and add them to `autoApprovers` (see Before you start). |
 | `https://logs.…` doesn't load | The service is waiting for approval (Tailscale console → Services), or your policy has no grant for it. |
 | `https://logs.…` resolves but times out, after you defined or renamed a service in the console | Tailscale hasn't noticed that the server serves it. On the server, run `sudo tailscale serve --service=svc:logs --https=443 off` (same for `status`), then re-run `./deploy.sh configure --tags tailscale`. |
+| Players can't join `<name>.mc.…` | Check that `<name>.mc.<domain>` resolves to the server, the name is in `minecraft_servers` (then `--tags games`), and the playbook says "server is up". mc-router's log: `{container="games-mc-router-1"}` in Grafana. |
+| Players can't join `<name>.factorio.…` without a port | Only the server on the game's default port works without one. Check `game_default_ports` in `terraform.tfvars` (then `./deploy.sh infra`) and that the server's allocation is `0.0.0.0:34197`. Other servers need `name:port`. |
+| The playbook stops at "Explain why mc-router didn't start" | Usually a game server still uses port 25565. See [Move an existing Minecraft server](#move-an-existing-minecraft-server-to-a-name). |
 | You can't SSH in | Tailscale is down on the server or on your device. Use OCI Bastion (see Everyday tasks). |
 | Beszel shows the server as "pending" | Normal for the first minute after a restart. |
 | The disk is filling up | Check Beszel. Usual causes: game backups (lower the retention) or a very chatty log. |
@@ -416,8 +532,9 @@ ansible/roles/
   tailscale/              Private admin access and the dashboard addresses
   calagopus/              The game panel, its database and cache
   web/                    Caddy: the panel, your websites and your apps
+  games/                  mc-router: Minecraft servers by name
   observability/          Beszel, Grafana, Loki, Alloy
-ansible/group_vars/all/   vars.yml (yours: domain, sites, apps), vault.yml (secrets),
+ansible/group_vars/all/   vars.yml (yours: domain, sites, apps, Minecraft servers), vault.yml (secrets),
                           images.yml (versions), network.yml (internal addresses)
 apps/                     Your web apps, one folder each (see apps/example/)
 scripts/init-vault.sh     Creates missing passwords without printing them

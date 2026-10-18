@@ -37,6 +37,14 @@ locals {
     # Lets tailnet devices connect directly instead of through relays. WireGuard ignores
     # anything that isn't from a known device.
     [{ desc = "Tailscale direct", proto = "UDP", source = "0.0.0.0/0", min = 41641, max = 41641 }],
+    # One server per game on the game's default port (players can leave the port out).
+    [for p in var.game_default_ports :
+      { desc = "${p.name} (default port)", proto = p.proto, source = "0.0.0.0/0", min = p.port, max = p.port }
+    ],
+    # mc-router (Minecraft by name) listens on 25565. The default game range already covers it.
+    var.game_port_range.min <= 25565 && 25565 <= var.game_port_range.max ? [] : [
+      { desc = "Minecraft (mc-router)", proto = "TCP", source = "0.0.0.0/0", min = 25565, max = 25565 }
+    ],
   )
 }
 

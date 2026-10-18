@@ -16,11 +16,16 @@ Priorities: **security** and **analytics/observability** first, then convenience
   agent, socket proxy. Admin created, registration off, setup wizard closed, telemetry off.
 - Admin access over Tailscale: `ssh ubuntu@calagopus`, Grafana `https://logs.<tailnet>.ts.net`,
   Beszel `https://status.<tailnet>.ts.net` (Tailscale Services).
+- Done since: public SSH closed, DNS `panel` → server with a Let's Encrypt certificate, the
+  stale `/etc/hosts` line removed, public allocations `0.0.0.0:25500-25600` added, one Minecraft
+  server ("Vanilla latest stable") created on `0.0.0.0:25565` (not installed yet).
 - **Still open:**
-  - Close public SSH: `./deploy.sh infra` removes the `SSH bootstrap` rule.
-  - DNS `A` record `panel` → server, for the HTTPS certificate.
-  - Remove the stale `/etc/hosts` line on the laptop.
-  - First panel login + 2FA, allocations, Beszel alerts.
+  - Minecraft by name: add the private allocations (`172.18.0.1`, 25700–25799), move the
+    vanilla server off `0.0.0.0:25565`, delete that allocation, add the DNS wildcard `*`, list
+    the server in `minecraft_servers`, run `--tags games` (README, "Game addresses").
+  - Factorio, when wanted: `game_default_ports` with 34197/udp in `terraform.tfvars`, then
+    `./deploy.sh infra`, and the allocation `0.0.0.0:34197` in the panel.
+  - Beszel alerts.
 
 ### Code status (2026-10-16, first implementation pass)
 
@@ -40,6 +45,7 @@ Legend: ✅ implemented + validated locally · 🟡 implemented, needs the real 
 | Tailscale | `roles/tailscale` | ✅ | Tagged join via key file; dashboards as Tailscale Services `logs` (Grafana) and `status` (Beszel); fails fast if HTTPS certs are off |
 | Calagopus stack | `roles/calagopus` | ✅ | AIO + Postgres 18 + Valkey, digest-pinned. Locally tested with the standalone image: `/.env` loading, secrets absent from `docker inspect`, idempotent bootstrap (3 changes → 0), registration blocked, wizard closed, admin API returns 403 until 2FA, HTTP→HTTPS, token redaction in access logs |
 | Wings on AIO | `roles/calagopus` | 🟡 | Data on the volume at identical paths; `xfs_quota` via `SYS_ADMIN` + device; smoke test checks quotas on the host |
+| Game addresses | `roles/games`, `oci/network.tf` | 🟡 | One DNS wildcard. mc-router on 25565: Minecraft by name (`<name>.mc.<domain>`) to private `172.18.0.1` allocations; opt-in via `minecraft_servers`. `game_default_ports` for portless Factorio etc. Routing, unknown-name rejection, SIGHUP reload and dashboard queries tested locally; `--check` clean on the server. Not deployed yet |
 | Websites + apps | `roles/web`, `apps/`, `scripts/publish-site.sh` | ✅ | Caddy in its own role. One `sites:` list (static / proxy / redirect), apps as plain compose folders, blog upload over Tailscale. Locally tested, see below |
 | Monitoring stack | `roles/observability` | ✅ | Beszel + Grafana/Loki/Alloy + socket proxy (Dozzle dropped 2026-10-17). See the test notes below |
 | Lint | — | ✅ | ansible-lint `production` profile: 0 findings; `terraform fmt`/`validate` pass |
@@ -118,6 +124,8 @@ These ran on throwaway containers on a workstation, with all data in a scratch f
       version (tested locally on Docker 28 with a stand-in network).
 - [ ] Moving the apex domain from GitHub Pages to the server: change its `A` records, then publish the blog.
 - [ ] Unattended Docker upgrade with `live-restore` keeps game servers running.
+- [ ] mc-router on the server: a real client joins `<name>.mc.<domain>` with no port; a bare-IP
+      connection gets nothing; connections show up on the Security overview.
 
 ---
 
@@ -183,6 +191,9 @@ shown there:
 - [x] Playbook split into roles with tags.
 - [x] Local lint: ansible-lint (`production`), `terraform fmt/validate`, shellcheck.
 - [ ] CI (GitHub Actions) running those, plus `tflint` and `trivy config`.
+- [x] `nix develop` registers its tools as a GC root (`.direnv/tools`). Terraform is unfree, so
+      nix compiles it, and Determinate Nix's automatic GC (it runs when the disk is low) kept
+      deleting it.
 
 ### Phase 1: Calagopus stack
 
@@ -197,6 +208,22 @@ shown there:
 - [ ] DNS A record for `panel.<domain>` (manual) and remove the stale `/etc/hosts` lines.
 - [x] Smoke test at the end of the play.
 - [ ] Automate allocations for `game_port_range` (currently a manual step in the README).
+
+### Game addresses (done 2026-10-18, not deployed yet)
+
+- [x] Pattern `<server>.<game>.<domain>`, one wildcard DNS record (`*`) for everything.
+- [x] Two kinds of allocation: public `0.0.0.0` (25500–25600) and private `172.18.0.1`
+      (25700–25799, reachable only by mc-router and Caddy). The ranges don't overlap.
+- [x] `games` role: mc-router on 25565 joins `calagopus_nw` and routes names to private
+      allocations. Routes from `minecraft_servers` in `vars.yml`, reloaded with SIGHUP.
+      Hardened container, no Docker socket. Empty list → mc-router stopped, 25565 free.
+- [x] The play stops with an explanation if port 25565 is taken; it prints each address and
+      whether its server is up.
+- [x] Security overview: connections per server name, unknown names by IP.
+- [x] Terraform opens 25565 separately if `game_port_range` ever stops covering it.
+- [x] `game_default_ports` (Terraform, empty by default): one server per game on its default
+      port, so players leave the port out (Factorio 34197/udp). Other servers: name + port.
+- [ ] Bedrock/Geyser: needs its own public UDP port (no hostname routing possible).
 
 ### Websites and apps (done 2026-10-17)
 
@@ -301,3 +328,4 @@ Backups come in three layers (see README → Backups):
 | D10 | Server size on PAYG | 4 OCPU / 24 GB, Terraform guard at that size | decided 2026-10-17 |
 | D11 | Websites and apps | `web` role, `sites:` list, `apps/` folders, blog at the apex via `publish-site.sh` | decided 2026-10-17 |
 | D12 | Dashboard addresses | Tailscale Services `logs` (Grafana) and `status` (Beszel), no ports | decided 2026-10-18 |
+| D13 | Game addresses | `<server>.<game>.<domain>` with one wildcard DNS record, set once (no DNS automation, no API keys on the server). Minecraft Java by name with mc-router on 25565 and private `172.18.0.1` allocations (instead of per-server SRV records; also hides servers from IP scanners). Factorio and other games: the server on the game's default port (`game_default_ports`) needs no port, the rest use name + port. Rejected: an on-instance nameserver (public port 53 for SRV only) and Caddy layer4 (needs a custom build, can't read the Minecraft handshake) | decided 2026-10-18 |

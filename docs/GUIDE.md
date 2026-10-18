@@ -77,6 +77,9 @@ flowchart LR
         db[("Postgres")]
         cache[("Valkey")]
       end
+      subgraph gamesstack["games stack"]
+        router["mc-router"]
+      end
       games["Game server<br/>containers"]
       subgraph obsstack["observability stack"]
         grafana["Grafana"]
@@ -97,7 +100,9 @@ flowchart LR
   public --> seclist
   seclist -- "443" --> caddy
   seclist -- "2022 SFTP" --> panel
+  seclist -- "25565" --> router
   seclist -- "game ports" --> games
+  router -- "172.18.0.1:port" --> games
   caddy --> panel
   caddy --> apps
   caddy --> blog
@@ -123,10 +128,12 @@ Read it as three layers:
    server, the data disk, backups, alarms and the budget.
 2. **The host** (Ansible roles `base`, `storage`, `docker`, `firewall`, `tailscale`): OS
    hardening, the data disk mount, Docker, small firewall additions, and private admin access.
-3. **Three Docker Compose stacks plus your apps** (Ansible roles `calagopus`, `web`,
+3. **Four Docker Compose stacks plus your apps** (Ansible roles `calagopus`, `web`, `games`,
    `observability`):
    - `calagopus`: the game panel and its database and cache.
    - `web`: Caddy, the only process on ports 80/443.
+   - `games`: mc-router on 25565, Minecraft servers by name. Only runs when
+     `minecraft_servers` lists a server.
    - `observability`: monitoring.
    - Your apps are extra compose projects in `apps/`.
 
@@ -139,19 +146,19 @@ through the Docker socket, on its own Docker network.
 | :--- | :--- |
 | `README.md` | Short user guide: setup, everyday tasks, troubleshooting table. |
 | `docs/GUIDE.md` | This document. |
-| `PLAN.md` | Status table, roadmap checkboxes, decisions log (D1–D11), test results. |
+| `PLAN.md` | Status table, roadmap checkboxes, decisions log (D1–D13), test results. |
 | `deploy.sh` | `infra` / `bootstrap` / `configure`. See [section 6](#6-the-deploy-flow-deploysh). |
 | `scripts/init-vault.sh` | Creates or completes the encrypted Ansible vault without printing secrets. |
 | `scripts/publish-site.sh` | Uploads a built static site over Tailscale with `rsync --delete`. |
-| `flake.nix` | `nix develop` shell: terraform, ansible, ansible-lint, openssh, jq, shellcheck, oci-cli. Terraform is unfree, so it isn't in the binary cache and nix compiles it. `nix develop --profile .direnv/flake-profile` makes the shell a GC root, so automatic garbage collection doesn't delete the build (`.direnv/` is gitignored). |
+| `flake.nix` | `nix develop` shell: terraform, ansible, ansible-lint, openssh, jq, shellcheck, oci-cli. Terraform is unfree, so it isn't in the binary cache and nix compiles it (minutes). The shell hook registers the tools as a GC root (`.direnv/tools`, gitignored), so nix's automatic garbage collection, which Determinate Nix runs when the disk is low, doesn't delete the build. |
 | `oci/*.tf` | Terraform. `api_key.pem`, `terraform.tfvars` and `terraform.tfstate` live here and are gitignored. |
 | `ansible/ansible.cfg` | Inventory path, vault password file, SSH options. |
-| `ansible/site.yml` | The playbook: a vault sanity check, then 8 roles in a fixed order. |
+| `ansible/site.yml` | The playbook: a vault sanity check, then 9 roles in a fixed order. |
 | `ansible/requirements.yml` | Collections: community.docker, community.general, ansible.posix. |
 | `ansible/group_vars/all/vars.yml` | **Your** settings (domain, emails, sites, apps). Gitignored. A copy of `vars.yml.example`. |
 | `ansible/group_vars/all/vault.yml` | **Your** secrets, encrypted with ansible-vault. Gitignored. |
 | `ansible/group_vars/all/images.yml` | Every container image, pinned by tag + digest. Tracked. |
-| `ansible/group_vars/all/network.yml` | Internal Docker addressing for the shared `web` network. Tracked. |
+| `ansible/group_vars/all/network.yml` | Internal Docker addressing: the shared `web` network, Wings' network name and gateway, the dashboard service names. Tracked. |
 | `ansible/roles/<role>/` | `tasks/`, `defaults/` (every tunable), `templates/`, sometimes `files/` and `handlers/`. |
 | `apps/<name>/compose.yml` | Your web apps. `apps/example/` is a commented template. |
 | `.gitignore` | Keeps state, secrets, inventory, `.ansible/` and `oci/tfplan` out of git. |
@@ -162,8 +169,8 @@ through the Docker socket, on its own Docker network.
 
 | File | Holds | Tracked in git? |
 | :--- | :--- | :--- |
-| `oci/terraform.tfvars` | Oracle account IDs, region, `notification_email`. Optionally `game_port_range`, `instance_ocpus`, etc. | No |
-| `ansible/group_vars/all/vars.yml` | Domain, emails, timezone, Tailscale hostname, `sites:`, `apps:`. Any role default can be overridden here. | No |
+| `oci/terraform.tfvars` | Oracle account IDs, region, `notification_email`. Optionally `game_port_range`, `game_default_ports`, `instance_ocpus`, etc. | No |
+| `ansible/group_vars/all/vars.yml` | Domain, emails, timezone, Tailscale hostname, `sites:`, `apps:`, `minecraft_servers:`. Any role default can be overridden here. | No |
 | `ansible/group_vars/all/vault.yml` | Passwords and keys (see [secrets inventory](#secrets-inventory)). | No (encrypted anyway) |
 | `apps/<name>/` | Your app's compose file and config. | Yes, so no secrets in here |
 
@@ -194,6 +201,8 @@ run**, then **`-e` extra vars**. In practice:
 | `calagopus_admin_username` / `_email` | `admin` / — | The first panel admin, created by Ansible. |
 | `sites` | example list | Websites (see [section 10](#10-web-caddy-websites-and-apps)). |
 | `apps` | `[]` | Folder names in `apps/` to deploy. |
+| `minecraft_servers` | `[]` | Minecraft servers by name: `{ name, port }`, port of a `172.18.0.1` allocation. Empty means no mc-router. |
+| `games_minecraft_subdomain` | `mc` | Players join `<name>.<this>.<domain>`. |
 | `calagopus_settings` | 4 keys | Panel settings forced on every run (role default; override the whole dict to change). |
 | `calagopus_wings_disk_limiter_mode` | `xfs_quota` | Per-game-server disk limits. Set `none` if quotas don't work on the host. |
 | `observability_loki_retention` | `720h` | How long logs are kept. |
@@ -288,6 +297,8 @@ passphrase variable. That needs Terraform ≥ 1.10, which the nix shell provides
   | 443 | TCP | anywhere | Panel, websites, apps |
   | 2022 | TCP | anywhere | Wings SFTP |
   | `game_port_range` (default 25500–25600) | TCP + UDP | anywhere | Game servers |
+  | `game_default_ports` (default none) | as listed | anywhere | One server per game on the game's default port, e.g. Factorio 34197/udp |
+  | 25565 | TCP | anywhere | mc-router. A separate rule only if `game_port_range` doesn't already include 25565 (the default does). |
   | 22 | TCP | the VCN only (`10.0.0.0/16`) | OCI Bastion (emergency SSH) |
   | 22 | TCP | `ssh_bootstrap_cidrs` (normally empty) | First bootstrap only |
   | 41641 | UDP | anywhere | Direct Tailscale connections |
@@ -375,10 +386,12 @@ charge emails you.
 5. `tailscale`
 6. `calagopus`
 7. `web`
-8. `observability`
+8. `games`
+9. `observability`
 
 The only order that's truly critical is **`web` after `calagopus`** (see
-[the exposure gate](#the-exposure-gate)). The rest follows dependencies: Docker needs the disk
+[the exposure gate](#the-exposure-gate)). `games` also comes after `calagopus`, because
+mc-router joins Wings' network, which exists only once Wings has started. The rest follows dependencies: Docker needs the disk
 mounted, the firewall changes Docker's chain, and so on.
 
 Every role can run alone with `--tags <role>`. Roles that need runtime facts (the data disk's
@@ -746,6 +759,92 @@ Details that matter:
   `calagopus_wings_disk_limiter_mode: none`.
 - Port 2022 accepts connections.
 
+### Game addresses: role `games` and mc-router
+
+Players use `<server>.<game>.<domain>`. How the port is hidden depends on the game.
+
+**DNS is one wildcard record, `*` → the server's IP**, set once. DNS wildcards match any number
+of labels, so `survival.mc.<domain>` and `islands.factorio.<domain>` are covered as long as no
+record exists at or under `mc` / `factorio`. An explicit record there (even `x.mc`) creates that
+name, and the wildcard then stops covering its other children. Records that already exist (apex,
+`www`, MX) are unaffected.
+
+**Routing by name only works if the protocol carries the name.** HTTP sends a `Host` header,
+TLS sends SNI, and Minecraft Java puts the typed address in its first packet (the handshake).
+Factorio and most other games send nothing like it, so no proxy (Caddy, mc-router, Caddy's
+layer4 plugin, a custom nameserver) can tell two servers apart by name. For them the port
+decides.
+
+| Kind | Routed by | Players type |
+| :--- | :--- | :--- |
+| Web (panel, maps, apps) | Caddy (`sites:`) | name |
+| Minecraft Java | mc-router (`minecraft_servers:`) | name |
+| Factorio and other games | nothing (DNS name + port) | name for the server on the game's default port (`game_default_ports`), `name:port` for the rest |
+
+Hosting companies do the same. Minecraft gets a name-routing proxy or per-server `SRV` records,
+written by their own DNS automation. Other games show `name:port`. Here mc-router replaces the
+`SRV` records, so the one wildcard record is all the DNS this setup needs.
+
+**Two kinds of allocation.** The panel assigns each game server an IP and a port:
+
+| Allocation IP | Ports (convention) | Reachable from | For |
+| :--- | :--- | :--- | :--- |
+| `0.0.0.0` | 25500–25600 (`game_port_range`), plus `game_default_ports` | The internet | Factorio and other games |
+| `172.18.0.1` | 25700–25799 | Only this server | Minecraft behind mc-router, map web pages behind Caddy |
+
+`172.18.0.1` is the gateway of Wings' network `calagopus_nw`. Docker publishes such a port only
+on that address, so it's private. The ranges don't overlap: `0.0.0.0:25700` and
+`172.18.0.1:25700` can't both be published, and keeping them apart avoids that. Nothing
+enforces the convention; it's in the README.
+
+**Minecraft (Java): no port at all.** Minecraft's first packet (the handshake) contains the
+hostname the player typed. mc-router listens on 25565, reads that name and forwards the
+connection to the matching backend:
+
+```mermaid
+sequenceDiagram
+  participant P as Player
+  participant R as mc-router :25565
+  participant M as Minecraft server<br/>172.18.0.1:25700
+  P->>R: handshake "survival.mc.example.com"
+  R->>R: look up the name in routes.json
+  R->>M: open connection, replay the handshake
+  M-->>P: game traffic, relayed both ways
+  Note over R: unknown name: close, send nothing
+```
+
+- **DNS:** the wildcard record covers every name; nothing to add per server.
+- **Routes** come from `minecraft_servers` in `vars.yml` and are rendered to
+  `/opt/stacks/games/config/routes.json`: `"<name>.mc.<domain>": "172.18.0.1:<port>"`, with
+  `"default-server": null`. Hostnames match regardless of case.
+- **Reloads don't kick anyone.** A changed `routes.json` notifies a handler that sends mc-router
+  `SIGHUP`. It re-reads the file without restarting.
+- **mc-router joins `calagopus_nw`** and connects to the gateway address. Docker DNATs that into
+  the game container on the same bridge; this is the same path Velocity/BungeeCord setups use to
+  reach backends on `172.18.0.1`.
+- **Hardening:** pinned image, runs as uid 65532, read-only filesystem, all capabilities
+  dropped, `no-new-privileges`. No Docker socket (routes are static).
+  `CONNECTION_RATE_LIMIT` is 5 new connections per second (default 1).
+- **Opt-in:** with an empty `minecraft_servers`, the role stops mc-router (if a previous run
+  started it), and 25565 is free for an ordinary allocation again.
+- **Logs:** mc-router writes logfmt lines (`msg="Connecting to backend" client=… server=…`).
+  Alloy collects them like any container's, and the Security overview has two panels: connections
+  per server name, and IPs that asked for unknown names.
+- **The playbook output** lists each address and whether something listens on its backend port
+  (a 2-second TCP connect to `172.18.0.1:<port>`).
+
+**Factorio and other games: default port, or name plus port.** A game client fills in the
+game's default port when the player types only a name. So one server per game can be portless:
+
+- `game_default_ports` in `terraform.tfvars` (for example
+  `[{ name = "Factorio", proto = "UDP", port = 34197 }]`) adds one security-list rule each.
+  It's empty by default; the validation allows `TCP`/`UDP` and ports 1024–65535.
+- That server gets the allocation `0.0.0.0:34197` in the panel.
+- Every other server of the game uses `0.0.0.0` with a port from the public range. Set the
+  allocation's alias to `<server>.<game>.<domain>` so the panel shows `name:port`.
+- One IP has each port once: two games with the same default (Terraria and Satisfactory, both
+  7777) can't both be portless.
+
 ## 10. Web: Caddy, websites and apps
 
 ### Caddy's place
@@ -866,16 +965,16 @@ Caddy isn't on that network.
 
 **The trick:**
 
-1. Give the map plugin a Calagopus **allocation on IP `172.18.0.1`**.
+1. Give the map plugin a Calagopus **allocation on IP `172.18.0.1`** (ports 25700–25799 by
+   convention, see [game addresses](#game-addresses-role-games-and-mc-router)).
 2. Docker then publishes that port **only on the gateway address**. It isn't reachable from the
    internet, and not even from `127.0.0.1` on the host.
 3. Caddy connects to `172.18.0.1:<port>`. The host DNATs (redirects) that into the game
    container. This works across Docker networks (tested locally on Docker 28 with a stand-in
    network).
 
-**One hostname can serve both.** `survival.minecraft.example.com` can show the map over HTTPS
-on 443 while players join the game on its own port. With an SRV record
-(`_minecraft._tcp.survival.minecraft…`), Minecraft players don't even type the port.
+**One hostname can serve both.** `survival.mc.example.com` can show the map over HTTPS on 443
+(Caddy) while players join the game on 25565 (mc-router).
 
 ## 11. Monitoring
 
@@ -1007,7 +1106,7 @@ Single-binary Loki with filesystem storage in `/mnt/data/observability/loki`. It
 | `10.0.0.0/16` | VCN (Oracle's private network) | Subnet `10.0.1.0/24`. The server's private IP is in here. |
 | `100.64.0.0/10` | Tailscale (CGNAT range) | Your devices and the server on the tailnet. |
 | `172.17.0.0/16` | Docker's default bridge `docker0` | Unused by the stacks. |
-| `172.18.0.0/16` | Wings' `calagopus_nw` | Game containers. Gateway `172.18.0.1` is the address for map ports. |
+| `172.18.0.0/16` | Wings' `calagopus_nw` | Game containers and mc-router. Gateway `172.18.0.1` is the address of private allocations (map ports, Minecraft behind mc-router). |
 | `10.210.1.0/24` | `web` (shared, external) | Caddy `10.210.1.2` (fixed). Automatic addresses `.129+`, gateway `.128`. Panel and apps join. |
 | `10.210.2.0/24` | `calagopus_backend` (internal) | Panel, Postgres, Valkey. No internet. |
 | `10.210.3.0/24` | `observability_ops` | Monitoring containers. |
@@ -1020,12 +1119,14 @@ Single-binary Loki with filesystem storage in `/mnt/data/observability/loki`. It
 | Public (security list) | 80, 443 /tcp | Caddy | Internet |
 | Public | 2022/tcp | Wings SFTP (panel container) | Internet |
 | Public | 25500–25600 tcp+udp | Game servers (allocations on `0.0.0.0`) | Internet |
+| Public | 25565/tcp | mc-router, when `minecraft_servers` isn't empty | Internet |
+| Public | `game_default_ports` (none by default) | One server per game on its default port | Internet |
 | Public | 41641/udp | tailscaled | Internet (WireGuard ignores unknown peers) |
 | VCN | 22/tcp | sshd | Bastion inside the VCN. Bootstrap: your IP. |
 | Tailnet | 22 (host), 443 on `svc:logs` / `svc:status` | sshd, Grafana, Beszel | Your tailnet devices, as allowed by your tailnet grants |
 | Host loopback | 3000, 8090, 2375 | Grafana, Beszel hub, socket proxy | Processes on the host |
 | `web` network | 8000 | Panel HTTP | Caddy (and apps; harmless, since only Caddy is trusted for client IPs) |
-| `172.18.0.1` | allocations you create there | Game web ports | Caddy / host only |
+| `172.18.0.1` | allocations you create there (25700–25799) | Minecraft servers, game web ports | mc-router, Caddy, host only |
 | Inside containers | 64332 (Wings), 12345 (Alloy), 3100 (Loki), 5432, 6379 | Internal | Their own networks only |
 
 ### Why the host firewall doesn't protect Docker ports
@@ -1048,7 +1149,7 @@ That's why:
 ### What it defends against
 
 - **Anyone on the internet:**
-  - scanning ports
+  - scanning ports (Minecraft scanners included: they find nothing on the IP alone)
   - guessing panel or SSH passwords
   - claiming a fresh panel
   - abusing admin UIs
@@ -1067,6 +1168,7 @@ That's why:
 | Panel | Exposure gate. Registration off. 2FA required for admins. Telemetry off. Trusts only Caddy for client IPs. Decryption cache off. Secrets in a mounted file. |
 | Containers | Pinned images. `no-new-privileges` everywhere. Capabilities dropped and read-only filesystems where the app allows. Database and cache without internet. Monitoring through a GET-only proxy. Game containers can't reach the metadata service. |
 | Web | HTTPS everywhere with HSTS. Upload limit on the panel. Tokens redacted from logs. No HTTP/3. |
+| Games | Minecraft servers on private allocations behind mc-router, which drops connections asking for unknown names. Whitelist on by default. |
 | Visibility | All logs centralised for 30 days. Security dashboard. Out-of-band alarms. |
 
 ### Risks that are accepted, and why
@@ -1080,12 +1182,15 @@ That's why:
    need. Per-server firewalls exist in the panel.
 4. **The Beszel first-boot password is in its container environment**, and the socket proxy on
    host loopback can read environments. Both are visible only to someone already on the host.
-5. **Image updates are manual.** Pinning protects against surprises but delays security fixes.
+5. **Minecraft servers see mc-router's address, not the player's.** IP bans inside Minecraft
+   don't work; use the whitelist and name bans. The real IPs are in mc-router's log. PROXY
+   protocol could fix this, but vanilla servers don't support it.
+6. **Image updates are manual.** Pinning protects against surprises but delays security fixes.
    Check releases regularly.
-6. **Your laptop holds everything:** `.vault_pass` (plaintext, mode 600), the vault, the API key
+7. **Your laptop holds everything:** `.vault_pass` (plaintext, mode 600), the vault, the API key
    (password-protected), and the Terraform state. A compromised laptop means everything is
    compromised. Keep the vault password and the encryption key in a password manager too.
-7. **Single server, single Oracle account.** No high availability. Off-site backups aren't
+8. **Single server, single Oracle account.** No high availability. Off-site backups aren't
    there yet.
 
 ### Secrets inventory
@@ -1189,12 +1294,13 @@ it.
    - Create a pre-approved, single-use auth key with that tag.
 4. Run `scripts/init-vault.sh`. Store `.vault_pass` and the encryption key in a password manager.
 5. Run `./deploy.sh infra`, then confirm Oracle's subscription email.
-6. DNS: `A` records for `panel.<domain>`, the apex and `www` (if the blog is on), pointing at
-   `terraform -chdir=oci output -raw public_ip`.
+6. DNS: one wildcard `A` record `*` (covers the panel and every game name), plus the apex and
+   `www` if the blog is on, all pointing at `terraform -chdir=oci output -raw public_ip`.
 7. Run `./deploy.sh bootstrap`. Read the smoke test and HTTPS summary at the end.
 8. In the panel:
    - Log in as admin and enrol 2FA.
-   - Add allocations: `0.0.0.0`, ports 25500–25600.
+   - Add allocations: `0.0.0.0`, ports 25500–25600 (public), and `172.18.0.1`, ports
+     25700–25799 (private). If you'll use Minecraft by name, delete `0.0.0.0:25565`.
    - Add egg repositories.
    - Set up a System Backup Policy.
 9. In Beszel: set alert thresholds and a notification URL.
@@ -1207,6 +1313,7 @@ it.
 | Only websites/apps/Caddy | `--tags web` |
 | Only the panel stack | `--tags calagopus` |
 | Only monitoring | `--tags observability` |
+| Minecraft server names | Edit `minecraft_servers`, then `--tags games`. Reloads routes without disconnecting anyone. |
 | See what would change | `--check --diff`. Read-only lookups still run (`check_mode: false`). Steps that write through `docker compose exec` (panel settings, admin creation) can't be simulated and show as *skipped*, not *changed*. The 65 s pause and the smoke test are skipped. |
 | Skip the smoke test | `--skip-tags smoke` |
 
@@ -1227,6 +1334,8 @@ See the README section "Websites and apps". In short:
 - **App:** copy `apps/example/` to `apps/<name>/`, list it in `apps:`, add a `proxy:` site, run
   `--tags web`.
 - **Map:** an allocation on `172.18.0.1`, then a `proxy:` site to `172.18.0.1:<port>`.
+- **Minecraft name:** an allocation on `172.18.0.1`, then `{ name, port }` in
+  `minecraft_servers` and `--tags games`.
 
 ### Give a friend control of one game server
 
@@ -1288,8 +1397,9 @@ xfs_quota -x -c 'report -p -b -N' /mnt/data
 
 ## 16. How it was tested
 
-Nothing here has run on the real server yet. These local tests were run on a workstation
-(Docker 28, x86) with throwaway containers, with all data in a scratch folder:
+These local tests were run on a workstation (Docker 28–29, x86) with throwaway containers,
+with all data in a scratch folder, before the first deployment (the game-address tests came
+later):
 
 - **Static checks:**
   - ansible-lint, `production` profile: 0 findings
@@ -1327,6 +1437,14 @@ Nothing here has run on the real server yet. These local tests were run on a wor
   - Beszel goes from pending to **up** over the unix socket.
   - The socket proxy refuses writes.
   - Config-hash recreates only Loki when its config changes.
+- **Game addresses (mc-router):**
+  - A stand-in Wings network with a fake game server published only on its gateway IP, and
+    mc-router on that network: a real Minecraft handshake for a known name reached the game
+    server; an unknown name and a bare IP got nothing back.
+  - Adding a route by replacing `routes.json` (atomic rename, like Ansible) plus `SIGHUP`:
+    live without a restart.
+  - Both new dashboard queries against Loki with real mc-router log lines, IPv6 included.
+  - The role in `--check` against the real server, with and without a listed server.
 - **Dry run:** bootstrap in `--check` mode against a running stack: 0 failures, 0 changes.
 - **Not testable locally:** the AIO image with real Wings, XFS quotas, Tailscale, the iptables
   rules on Oracle's image, the reboot order, Terraform against Oracle. These are listed in
@@ -1398,17 +1516,23 @@ Nothing here has run on the real server yet. These local tests were run on a wor
     crash on missing values. ([15](#change-something))
 42. **Each role looks up the facts it needs itself** (data disk device, tailnet name), so
     `--tags <role>` works on its own. If you add a role, keep it that way. ([8](#8-host-layer-ansible-roles-15))
+43. **mc-router mounts its config folder, not the file.** Ansible replaces `routes.json` with
+    a new file; a single-file bind mount would keep showing the old one. ([9](#game-addresses-role-games-and-mc-router))
+44. **Port 25565 belongs to mc-router** once `minecraft_servers` isn't empty. A game server on
+    `0.0.0.0:25565` blocks it, and the play stops with an explanation. ([9](#game-addresses-role-games-and-mc-router))
+45. **The panel shows `172.18.0.1:<port>` for Minecraft servers behind mc-router.** Players
+    need the name only. ([9](#game-addresses-role-games-and-mc-router))
+46. **A DNS record under a game label breaks the wildcard there.** Creating `mc` or `x.mc`
+    makes `survival.mc` stop resolving. Keep game names on the wildcard. ([9](#game-addresses-role-games-and-mc-router))
+47. **Only one server per game can skip the port**, the one on the game's default port. Name
+    routing needs a protocol that sends the name; Factorio's doesn't. ([9](#game-addresses-role-games-and-mc-router))
 
 ## 18. Known gaps
 
 In rough priority order:
 
-1. **First real deployment** and the "verify on the real host" list in PLAN.md:
-   - quotas inside the AIO
-   - Tailscale serve next to Caddy
-   - the reboot order
-   - map ports via `172.18.0.1` on the server's Docker version
-   - moving the apex DNS from GitHub Pages
+1. **The rest of the "verify on the real host" list** in PLAN.md. The first deployment ran
+   on 2026-10-18; mc-router and map ports via `172.18.0.1` haven't run on the server yet.
 2. **ARM compatibility of games.**
    - Minecraft (Java) is fine.
    - Factorio has an official ARM64 Linux build, but only on the experimental channel as of
@@ -1425,7 +1549,10 @@ In rough priority order:
    Grafana alert rules for login-failure bursts and 5xx spikes.
 7. **Image update automation** (Renovate) and **CI** for the lint checks.
 8. **Terraform state** in remote storage instead of one local file.
-9. **Simplification candidate:** `CALAGOPUS_*` env overrides for Wings settings instead of the
+9. **Minecraft Bedrock** (and Geyser) can't go through mc-router: it's UDP and carries no
+   hostname. It would need its own public port.
+10. **Allocations are still created by hand** in the panel, including the private range.
+11. **Simplification candidate:** `CALAGOPUS_*` env overrides for Wings settings instead of the
    entrypoint `cp`. First check that the AIO's bundled Wings supports them.
 
 ## 19. Glossary
@@ -1435,19 +1562,22 @@ In rough priority order:
 | **AIO** | Calagopus "all-in-one" image: the panel and Wings in one container. |
 | **Allocation** | An IP + port that the panel assigns to a game server. |
 | **Bastion** | Oracle's managed jump host for SSH into the VCN. Free. |
-| **Compose project** | A set of containers from one `compose.yml`. Here: `calagopus`, `web`, `observability`, one per app. |
+| **Compose project** | A set of containers from one `compose.yml`. Here: `calagopus`, `web`, `games`, `observability`, one per app. |
 | **Config hash** | A label holding a hash of a service's config files, so Compose recreates it when they change. |
 | **DNAT** | Destination NAT: the kernel rewrites a packet's destination, for example host port to container. |
 | **DOCKER-USER** | The iptables chain Docker leaves for your own rules on container traffic. |
 | **Egg** | A game server template (Pterodactyl format): install script, image, startup command. |
 | **Ephemeral variable** | A Terraform variable never written to state or plan files. |
 | **Exposure gate** | Bootstrapping the panel before Caddy exists, so it can't be claimed. |
+| **mc-router** | A small proxy that sends Minecraft players to a server based on the hostname they typed. |
 | **MagicDNS** | Tailscale's DNS: devices reachable as `<name>.<tailnet>.ts.net`. |
 | **OOBE** | "Out of box experience": Calagopus' first-run setup wizard. |
 | **PAYG** | Oracle's Pay As You Go account. Free amounts apply, and anything above is billed. |
+| **Private allocation** | An allocation on `172.18.0.1`: reachable from this server (mc-router, Caddy), not from the internet. |
 | **prjquota** | XFS project quotas: disk limits per folder tree, used for per-server limits. |
 | **Security list** | Oracle's stateful firewall for a subnet. |
 | **Subuser** | A panel user with chosen permissions on one game server. |
+| **Wildcard record** | A DNS record for `*.<domain>` that answers for every name without a record of its own. |
 | **Tailnet** | Your private Tailscale network. |
 | **VCN** | Virtual Cloud Network: Oracle's private network. |
 | **Wings** | The Calagopus agent that runs game servers as Docker containers. |

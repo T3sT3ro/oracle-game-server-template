@@ -73,6 +73,21 @@ variable "game_port_range" {
   }
 }
 
+variable "game_default_ports" {
+  type        = list(object({ name = string, proto = string, port = number }))
+  default     = []
+  description = <<-EOT
+    Extra public ports, so one server per game can use the game's default port and players can
+    leave the port out (islands.factorio.example.com instead of ...:25510). Each needs a matching
+    0.0.0.0 allocation in the panel. Example: [{ name = "Factorio", proto = "UDP", port = 34197 }]
+  EOT
+
+  validation {
+    condition     = alltrue([for p in var.game_default_ports : contains(["TCP", "UDP"], p.proto) && p.port >= 1024 && p.port <= 65535])
+    error_message = "game_default_ports: proto must be \"TCP\" or \"UDP\", and port between 1024 and 65535."
+  }
+}
+
 variable "ssh_bootstrap_cidrs" {
   type        = list(string)
   default     = []

@@ -30,7 +30,15 @@ sites:
   - { host: "{{ domain_name }}", static: blog }
   - { host: "www.{{ domain_name }}", redirect: "https://{{ domain_name }}" }
   # - { host: "app.{{ domain_name }}", proxy: "myapp:3000" }
-  # - { host: "survival.minecraft.{{ domain_name }}", proxy: "172.18.0.1:25501" }
+  # - { host: "survival.mc.{{ domain_name }}", proxy: "172.18.0.1:25701" }
 
 # Apps: folder names in apps/ (each has a compose.yml). See apps/example/.
 apps: []
+
+# Minecraft (Java) servers by name: players join <name>.mc.<domain>, no port needed.
+# For each server: give it a private allocation in the panel (IP 172.18.0.1, a port from
+# 25700-25799), add it here and run `./deploy.sh configure --tags games`. DNS: the one
+# wildcard record (* -> the server's IP) covers every name. See the README, "Game addresses".
+minecraft_servers: []
+#  - { name: survival, port: 25700 }
+#  - { name: creative, port: 25701 }

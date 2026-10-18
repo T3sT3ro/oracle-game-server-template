@@ -1,0 +1,8 @@
+{
+  "default-server": null,
+  "mappings": {
+{% for server in minecraft_servers %}
+    "{{ server.name }}.{{ games_minecraft_subdomain }}.{{ domain_name }}": "{{ wings_gateway_ip }}:{{ server.port }}"{{ "," if not loop.last }}
+{% endfor %}
+  }
+}

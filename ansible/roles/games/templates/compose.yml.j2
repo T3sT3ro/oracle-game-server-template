@@ -1,0 +1,31 @@
+# {{ ansible_managed }}
+# mc-router: players join <name>.{{ games_minecraft_subdomain }}.{{ domain_name }} on Minecraft's default port, 25565.
+# It reads the name from the player's first packet and forwards the connection to that server's
+# private allocation ({{ wings_gateway_ip }}:<port>). Names it doesn't know get nothing, so port
+# scanners that only know the IP find no server.
+# The routes are in config/routes.json. Ansible reloads them with SIGHUP: no restart, nobody kicked.
+name: games
+
+services:
+  mc-router:
+    image: "{{ images.mc_router }}"
+    restart: unless-stopped
+    environment:
+      ROUTES_CONFIG: /config/routes.json
+      CONNECTION_RATE_LIMIT: 5 # new connections per second (default 1)
+    ports:
+      - "25565:25565"
+    volumes:
+      # The folder, not the file: Ansible replaces routes.json with a new file, and a
+      # single-file mount would keep showing the old one.
+      - ./config:/config:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Wings' game network: from here, {{ wings_gateway_ip }}:<port> reaches the private allocations.
+    networks: [wings]
+
+networks:
+  wings:
+    external: true
+    name: {{ wings_network }}
